@@ -3,13 +3,14 @@ kind: phase
 name: phase-03-videos
 sources_mtime:
   docs/project-plan.md: "2026-09-18T08:30:32-03:00"
-  docs/decisions/technical-decisions-phase-03-videos.md: "2026-09-23T08:13:16-03:00"
+  docs/decisions/technical-decisions-phase-03-videos.md: "2026-09-23T18:19:32-03:00"
   docs/decisions/technical-decisions-openapi-docs-nestjs.md: "2026-09-18T08:30:32-03:00"
   docs/phases/phase-01-configuracao-base/context.md: "2026-09-18T08:30:32-03:00"
   docs/phases/phase-02-auth/context.md: "2026-09-18T08:30:32-03:00"
   docs/phases/phase-02-auth-frontend/context.md: "2026-09-18T08:30:32-03:00"
   .claude/skills/testing-guide-nestjs-project/SKILL.md: "2026-09-18T08:30:32-03:00"
   .claude/skills/testing-guide-nestjs-project/artifacts/future-types.md: "2026-09-18T08:30:32-03:00"
+  docs/phases/phase-03-videos/library-refs.md: "2026-09-23T18:21:25-03:00"
 ---
 
 # phase-03-videos — Context
@@ -44,21 +45,23 @@ sources_mtime:
 
 | Ref | Source | Scope | Topic | Status | Decision | Libraries |
 |-----|--------|-------|-------|--------|----------|-----------|
-| phase-03-videos/TD-01 | phase | Backend | Queue Technology (Message Queue) | pending | — | — |
-| phase-03-videos/TD-02 | phase | Backend | Video Worker Runtime Topology | pending | — | — |
-| phase-03-videos/TD-03 | phase | Repo-wide | Object Storage Runtime Image (local S3-compatible service) | pending | — | — |
-| phase-03-videos/TD-04 | phase | Backend | Storage Layout — Buckets, Object Keys and Thumbnail Expo… | pending | — | — |
-| phase-03-videos/TD-05 | phase | Cross-layer | Presigned URL Host Resolution Under Docker Networking | pending | — | — |
-| phase-03-videos/TD-06 | phase | Cross-layer | Upload Protocol for Files up to 10 GB | pending | — | — |
-| phase-03-videos/TD-07 | phase | Cross-layer | Upload Limits Contract — Part Size, Max Size, URL Expiry… | pending | — | — |
-| phase-03-videos/TD-08 | phase | Backend | Upload Completion Detection and Processing Trigger | pending | — | — |
-| phase-03-videos/TD-09 | phase | Backend | FFmpeg Integration in the Worker | pending | — | — |
-| phase-03-videos/TD-10 | phase | Backend | How the Worker Reads the Source Video | pending | — | — |
-| phase-03-videos/TD-11 | phase | Cross-layer | Unique Video URL Identifier | pending | — | — |
-| phase-03-videos/TD-12 | phase | Cross-layer | Streaming and Download Delivery | pending | — | — |
-| phase-03-videos/TD-13 | phase | Backend | Access Policy for Stream/Download Before Publication Exists | pending | — | — |
-| phase-03-videos/TD-14 | phase | Backend | Video Status Model | pending | — | — |
-| phase-03-videos/TD-15 | phase | Backend | Failure, Retry and Abandoned-Upload Policy | pending | — | — |
+| phase-03-videos/TD-01 | phase | Backend | Queue Technology (Message Queue) | decided | A | `@nestjs/bullmq@^11.0.5`, `bullmq@^6.3.8` |
+| phase-03-videos/TD-02 | phase | Backend | Video Worker Runtime Topology | decided | A | — |
+| phase-03-videos/TD-03 | phase | Repo-wide | Object Storage Runtime Image (local S3-compatible service) | decided | A | — |
+| phase-03-videos/TD-04 | phase | Backend | Storage Layout — Buckets, Object Keys and Thumbnail Exposure | decided | B | — |
+| phase-03-videos/TD-05 | phase | Cross-layer | Presigned URL Host Resolution Under Docker Networking | decided | A | `@aws-sdk/client-s3@^3.1138.0`, `@aws-sdk/s3-request-presigner@^3.1138.0` |
+| phase-03-videos/TD-06 | phase | Cross-layer | Upload Protocol for Files up to 10 GB | decided | A | `@aws-sdk/client-s3@^3.1138.0`, `@aws-sdk/s3-request-presigner@^3.1138.0` |
+| phase-03-videos/TD-07 | phase | Cross-layer | Upload Limits Contract — Part Size, Max Size, URL Expiry… | decided | A | — |
+| phase-03-videos/TD-08 | phase | Backend | Upload Completion Detection and Processing Trigger | decided | A | — |
+| phase-03-videos/TD-09 | phase | Backend | FFmpeg Integration in the Worker | decided | A | — |
+|     └─ Last revision: 2026-09-23 — Saídas do processamento persistidas: `duration`, `width`, `height`, … | | | | | | |
+| phase-03-videos/TD-10 | phase | Backend | How the Worker Reads the Source Video | decided | A | — |
+| phase-03-videos/TD-11 | phase | Cross-layer | Unique Video URL Identifier | decided | B | — |
+| phase-03-videos/TD-12 | phase | Cross-layer | Streaming and Download Delivery | decided | A | — |
+| phase-03-videos/TD-13 | phase | Backend | Access Policy for Stream/Download Before Publication Exists | decided | A | — |
+| phase-03-videos/TD-14 | phase | Backend | Video Status Model | decided | B | — |
+|     └─ Last revision: 2026-09-23 — Pré-cadastro do rascunho: o vídeo pertence ao canal do usuário autenticado… | | | | | | |
+| phase-03-videos/TD-15 | phase | Backend | Failure, Retry and Abandoned-Upload Policy | decided | A | — |
 
 _Source files:_
 
@@ -80,7 +83,86 @@ _Source files:_
 
 ## Decisions Detail
 
-_No decided TDs yet._
+### phase-03-videos/TD-01
+
+**Recommendation:** It is the only option with first-party NestJS support that works with the installed Nest 11. It gives retries, backoff and job-id deduplication without custom code, and it realizes the diagram's separate Message Queue container. The Redis container cost is small next to the storage and worker containers this phase adds anyway. Option B is attractive and technically reachable through `setDefaultBackendFactory`, but its combination with `@nestjs/bullmq` is undocumented and the backend is weeks old. That is too much risk for the phase's core infrastructure. Pin the CommonJS `@nestjs/bullmq@11.x` line (12.x is ESM-only) together with `bullmq@6`, and run Redis with `noeviction` + AOF. The job payload should carry only `{ videoId }`, with the DB as the source of truth. That keeps the queue replaceable later, including a move to Option B once it matures.
+**Libraries:** `@nestjs/bullmq@^11.0.5`, `bullmq@^6.3.8`
+
+### phase-03-videos/TD-02
+
+**Recommendation:** It gets the isolation that matters (a separate process and container that scales independently) without duplicating the data model or config. The Definition of Done stays a single `nestjs-project` pipeline. FFmpeg is installed in the image used by `video-worker` (see TD-09).
+**Libraries:** —
+
+### phase-03-videos/TD-03
+
+**Recommendation:** It keeps the product the plan and challenge specify, pinned for reproducibility, and it covers every S3 feature the other TDs rely on. The archive risk is limited to dev/test, because the code talks only to the S3 API through `@aws-sdk/client-s3` and never imports a MinIO SDK. Moving to Option C later is a Compose-only change.
+**Libraries:** —
+
+### phase-03-videos/TD-04
+
+**Recommendation:** Thumbnails are display assets meant to be visible, and listings in Phases 04–07 would otherwise presign dozens of URLs per page and lose all caching. Keys use the internal UUID (`videoId`), not the public slug (TD-11), so storage paths never depend on a URL-facing identifier.
+**Libraries:** —
+
+### phase-03-videos/TD-05
+
+**Recommendation:** It is the only option that keeps every container-to-container call on Compose service names, as the root `CLAUDE.md` requires, and it adds no infrastructure. Storage CORS for the public origin (browser multipart `PUT` must expose the `ETag` header) is configured in the storage init step.
+**Libraries:** `@aws-sdk/client-s3@^3.1138.0`, `@aws-sdk/s3-request-presigner@^3.1138.0`
+
+### phase-03-videos/TD-06
+
+**Recommendation:** It is the only option that keeps the API entirely out of the data path, which is the core non-functional requirement of the phase. It resumes at part granularity and works unchanged on S3 in production. The cost of a custom handshake falls on a future frontend phase, where Uppy's S3 multipart plugin already covers it. The BFF only relays the small JSON calls.
+**Libraries:** `@aws-sdk/client-s3@^3.1138.0`, `@aws-sdk/s3-request-presigner@^3.1138.0`
+
+### phase-03-videos/TD-07
+
+**Recommendation:** Keeping all chunking math on the server makes the 10 GB limit enforceable in two places: the declared size at creation and the real size via `HeadObject` at completion. The client contract stays minimal. Type validation at creation is a cheap first filter only; ffprobe in the worker (TD-09) is the authoritative check.
+**Libraries:** —
+
+### phase-03-videos/TD-08
+
+**Recommendation:** Multipart uploads need an explicit `CompleteMultipartUpload` call anyway, so the API is already in the loop at the right moment. Making that call the trigger keeps local and production identical. The order "commit status → enqueue with `jobId = videoId`" plus an idempotent processor (TD-15) makes a crash between the two steps recoverable.
+**Libraries:** —
+
+### phase-03-videos/TD-09
+
+**Recommendation:** `fluent-ffmpeg` is archived and broken, and the static-binary packages would burden the API's install for a worker-only need. The OS package plus a typed wrapper is small, patched with the base image, and fully testable with the real binary inside Compose. Thumbnail frame policy: a timestamp at ~10% of the duration, clamped to the video length, so very short videos still produce a frame.
+**Libraries:** —
+
+**Revisions:**
+- 2026-09-23 — Saídas do processamento persistidas: `duration`, `width`, `height`, `video_codec`, `audio_codec` (nullable — vídeo sem trilha de áudio), `size_bytes` e `mime`/container, todos extraídos via ffprobe. Thumbnail em JPEG, capturada em ~10% da duração (clamp ao comprimento do vídeo), redimensionada para largura 1280 mantendo a proporção. _Rationale:_ clarificação das saídas do processamento (AMB-2 de validation.md).
+
+### phase-03-videos/TD-10
+
+**Recommendation:** It is the only option whose cost does not grow with file size: metadata and one frame need megabytes, not the full 10 GB. That keeps processing fast and the worker stateless. Option B's reliability advantage only matters for heavy transcoding, which Phase 03 does not do.
+**Libraries:** —
+
+### phase-03-videos/TD-11
+
+**Recommendation:** It is the only option that is short (as the plan requires) and non-enumerable. It needs no dependency, and the database constraint turns uniqueness into a guarantee. The slug is generated when the draft is pre-registered (TD-06), so the URL exists from the start of the upload.
+**Libraries:** —
+
+### phase-03-videos/TD-12
+
+**Recommendation:** It satisfies "streaming sem download completo" through native `Range`/`206` from storage without pushing bytes through the API, and it matches the architecture diagram and the BFF decision. Download is the same mechanism with a different response header. HLS (C) can come later as a worker enhancement without changing these endpoints' contract.
+**Libraries:** —
+
+### phase-03-videos/TD-13
+
+**Recommendation:** It respects draft semantics and leaves Phases 04–05 purely additive (publish, then public/unlisted, then anonymous). Streaming and download are still fully exercised end to end by the owner.
+**Libraries:** —
+
+### phase-03-videos/TD-14
+
+**Recommendation:** Phase 04's "rascunho → publicação" flow is independent from processing, and modeling them separately now avoids a data migration and enum redefinition next phase. Failure details are stored in a nullable `processing_error` column for diagnosis (TD-15).
+**Libraries:** —
+
+**Revisions:**
+- 2026-09-23 — Pré-cadastro do rascunho: o vídeo pertence ao canal do usuário autenticado (`channel_id`); `title` default = nome do arquivo original sem extensão; `description` nula; `publication_status = draft` e `processing_status` no estado inicial de upload. A Fase 03 não expõe endpoint de edição de metadados editoriais (título/descrição) — edição e fluxo rascunho→publicação ficam exclusivamente na Fase 04. _Rationale:_ clarificação de escopo e fronteira com a Fase 04 (AMB-1 de validation.md).
+
+### phase-03-videos/TD-15
+
+**Recommendation:** BullMQ already provides attempts, exponential backoff, `jobId` deduplication and `UnrecoverableError` (TD-01), so the only new code is error classification and the final `failed` transition. Storage-side expiry of stale multipart uploads (MinIO env locally, lifecycle rule on S3) answers the plan's storage-cost concern for abandoned 10 GB uploads without writing a scheduler.
+**Libraries:** —
 
 ## Inherited Decisions Detail
 
@@ -230,7 +312,11 @@ _No decided TDs yet._
 
 ## Non-UI / Deferred Capabilities
 
-_None._
+| Capability | Status | Rationale | TD refs |
+|------------|--------|-----------|---------|
+| Upload de vídeos com suporte a arquivos de até 10GB sem impacto na performance | deferred | deferred_to_next_phase — fatia backend-only (o desafio da fase 03 deixa a UI de vídeo fora de escopo); a Fase 03 entrega o contrato HTTP de upload multipart que a futura UI consumirá via BFF. | phase-03-videos/TD-05, phase-03-videos/TD-06, phase-03-videos/TD-07 |
+| Reprodução via streaming (sem necessidade de download completo) | deferred | deferred_to_next_phase — fatia backend-only; o player de vídeo chega em fase posterior; a Fase 03 entrega o endpoint de streaming (302 → GET pré-assinado). | phase-03-videos/TD-05, phase-03-videos/TD-12, phase-03-videos/TD-13 |
+| Download do vídeo pelo usuário | deferred | deferred_to_next_phase — fatia backend-only; a ação de download na UI chega em fase posterior; a Fase 03 entrega o endpoint de download (`attachment`). | phase-03-videos/TD-12, phase-03-videos/TD-13 |
 
 ## Testing Requirements
 

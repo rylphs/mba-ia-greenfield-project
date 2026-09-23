@@ -1,7 +1,7 @@
 ---
 scope_type: phase
 related_phases: [3]
-status: pending
+status: decided
 date: 2026-09-23
 scope_description: "Backend foundation for video upload and processing: queue technology, worker topology, object storage runtime/layout/presigning, 10GB resumable upload protocol and limits, processing trigger, FFmpeg integration, unique video URL, streaming/download delivery and access, status model, and failure/retry policy."
 ---
@@ -55,7 +55,8 @@ _Inherited constraints (not reopened):_ PostgreSQL 17 + TypeORM 0.3.28 (Phase 01
 
 **Recommendation:** **Option A (BullMQ + Redis via `@nestjs/bullmq`)**. It is the only option with first-party NestJS support that works with the installed Nest 11. It gives retries, backoff and job-id deduplication without custom code, and it realizes the diagram's separate Message Queue container. The Redis container cost is small next to the storage and worker containers this phase adds anyway. Option B is attractive and technically reachable through `setDefaultBackendFactory`, but its combination with `@nestjs/bullmq` is undocumented and the backend is weeks old. That is too much risk for the phase's core infrastructure. Pin the CommonJS `@nestjs/bullmq@11.x` line (12.x is ESM-only) together with `bullmq@6`, and run Redis with `noeviction` + AOF. The job payload should carry only `{ videoId }`, with the DB as the source of truth. That keeps the queue replaceable later, including a move to Option B once it matures.
 
-**Decision:** _[pending]_
+**Decision:** A
+**Libraries:** `@nestjs/bullmq@^11.0.5`, `bullmq@^6.3.8`
 
 ---
 
@@ -86,7 +87,7 @@ _Inherited constraints (not reopened):_ PostgreSQL 17 + TypeORM 0.3.28 (Phase 01
 
 **Recommendation:** **Option A (same codebase, second entrypoint, separate Compose service)**. It gets the isolation that matters (a separate process and container that scales independently) without duplicating the data model or config. The Definition of Done stays a single `nestjs-project` pipeline. FFmpeg is installed in the image used by `video-worker` (see TD-09).
 
-**Decision:** _[pending]_
+**Decision:** A
 
 ---
 
@@ -117,7 +118,7 @@ _Inherited constraints (not reopened):_ PostgreSQL 17 + TypeORM 0.3.28 (Phase 01
 
 **Recommendation:** **Option A (MinIO from `quay.io`, pinned)**. It keeps the product the plan and challenge specify, pinned for reproducibility, and it covers every S3 feature the other TDs rely on. The archive risk is limited to dev/test, because the code talks only to the S3 API through `@aws-sdk/client-s3` and never imports a MinIO SDK. Moving to Option C later is a Compose-only change.
 
-**Decision:** _[pending]_
+**Decision:** A
 
 ---
 
@@ -143,7 +144,7 @@ _Inherited constraints (not reopened):_ PostgreSQL 17 + TypeORM 0.3.28 (Phase 01
 
 **Recommendation:** **Option B (private `videos` + public-read `thumbnails`)**. Thumbnails are display assets meant to be visible, and listings in Phases 04–07 would otherwise presign dozens of URLs per page and lose all caching. Keys use the internal UUID (`videoId`), not the public slug (TD-11), so storage paths never depend on a URL-facing identifier.
 
-**Decision:** _[pending]_
+**Decision:** B
 
 ---
 
@@ -174,7 +175,8 @@ _Inherited constraints (not reopened):_ PostgreSQL 17 + TypeORM 0.3.28 (Phase 01
 
 **Recommendation:** **Option A (two clients: internal `S3_ENDPOINT` + client-facing `S3_PUBLIC_ENDPOINT`)**. It is the only option that keeps every container-to-container call on Compose service names, as the root `CLAUDE.md` requires, and it adds no infrastructure. Storage CORS for the public origin (browser multipart `PUT` must expose the `ETag` header) is configured in the storage init step.
 
-**Decision:** _[pending]_
+**Decision:** A
+**Libraries:** `@aws-sdk/client-s3@^3.1138.0`, `@aws-sdk/s3-request-presigner@^3.1138.0`
 
 ---
 
@@ -200,7 +202,8 @@ _Inherited constraints (not reopened):_ PostgreSQL 17 + TypeORM 0.3.28 (Phase 01
 
 **Recommendation:** **Option A (S3 multipart with presigned part URLs)**. It is the only option that keeps the API entirely out of the data path, which is the core non-functional requirement of the phase. It resumes at part granularity and works unchanged on S3 in production. The cost of a custom handshake falls on a future frontend phase, where Uppy's S3 multipart plugin already covers it. The BFF only relays the small JSON calls.
 
-**Decision:** _[pending]_
+**Decision:** A
+**Libraries:** `@aws-sdk/client-s3@^3.1138.0`, `@aws-sdk/s3-request-presigner@^3.1138.0`
 
 ---
 
@@ -226,7 +229,7 @@ _Inherited constraints (not reopened):_ PostgreSQL 17 + TypeORM 0.3.28 (Phase 01
 
 **Recommendation:** **Option A (server-dictated fixed part size)**. Keeping all chunking math on the server makes the 10 GB limit enforceable in two places: the declared size at creation and the real size via `HeadObject` at completion. The client contract stays minimal. Type validation at creation is a cheap first filter only; ffprobe in the worker (TD-09) is the authoritative check.
 
-**Decision:** _[pending]_
+**Decision:** A
 
 ---
 
@@ -252,7 +255,7 @@ _Inherited constraints (not reopened):_ PostgreSQL 17 + TypeORM 0.3.28 (Phase 01
 
 **Recommendation:** **Option A (explicit completion endpoint)**. Multipart uploads need an explicit `CompleteMultipartUpload` call anyway, so the API is already in the loop at the right moment. Making that call the trigger keeps local and production identical. The order "commit status → enqueue with `jobId = videoId`" plus an idempotent processor (TD-15) makes a crash between the two steps recoverable.
 
-**Decision:** _[pending]_
+**Decision:** A
 
 ---
 
@@ -283,7 +286,12 @@ _Inherited constraints (not reopened):_ PostgreSQL 17 + TypeORM 0.3.28 (Phase 01
 
 **Recommendation:** **Option A (system FFmpeg + `execFile` wrapper)**. `fluent-ffmpeg` is archived and broken, and the static-binary packages would burden the API's install for a worker-only need. The OS package plus a typed wrapper is small, patched with the base image, and fully testable with the real binary inside Compose. Thumbnail frame policy: a timestamp at ~10% of the duration, clamped to the video length, so very short videos still produce a frame.
 
-**Decision:** _[pending]_
+**Decision:** A
+**Libraries:** —
+
+**Revisions:**
+
+- 2026-09-23 — Saídas do processamento persistidas: `duration`, `width`, `height`, `video_codec`, `audio_codec` (nullable — vídeo sem trilha de áudio), `size_bytes` e `mime`/container, todos extraídos via ffprobe. Thumbnail em JPEG, capturada em ~10% da duração (clamp ao comprimento do vídeo), redimensionada para largura 1280 mantendo a proporção. _Rationale:_ clarificação das saídas do processamento (AMB-2 de validation.md).
 
 ---
 
@@ -314,7 +322,7 @@ _Inherited constraints (not reopened):_ PostgreSQL 17 + TypeORM 0.3.28 (Phase 01
 
 **Recommendation:** **Option A (FFmpeg reads the internal presigned URL)**. It is the only option whose cost does not grow with file size: metadata and one frame need megabytes, not the full 10 GB. That keeps processing fast and the worker stateless. Option B's reliability advantage only matters for heavy transcoding, which Phase 03 does not do.
 
-**Decision:** _[pending]_
+**Decision:** A
 
 ---
 
@@ -345,7 +353,7 @@ _Inherited constraints (not reopened):_ PostgreSQL 17 + TypeORM 0.3.28 (Phase 01
 
 **Recommendation:** **Option B (random 11-char base64url slug + unique index)**. It is the only option that is short (as the plan requires) and non-enumerable. It needs no dependency, and the database constraint turns uniqueness into a guarantee. The slug is generated when the draft is pre-registered (TD-06), so the URL exists from the start of the upload.
 
-**Decision:** _[pending]_
+**Decision:** B
 
 ---
 
@@ -376,7 +384,7 @@ _Inherited constraints (not reopened):_ PostgreSQL 17 + TypeORM 0.3.28 (Phase 01
 
 **Recommendation:** **Option A (302 redirect to presigned GET, with `attachment` override for download)**. It satisfies "streaming sem download completo" through native `Range`/`206` from storage without pushing bytes through the API, and it matches the architecture diagram and the BFF decision. Download is the same mechanism with a different response header. HLS (C) can come later as a worker enhancement without changing these endpoints' contract.
 
-**Decision:** _[pending]_
+**Decision:** A
 
 ---
 
@@ -402,7 +410,7 @@ _Inherited constraints (not reopened):_ PostgreSQL 17 + TypeORM 0.3.28 (Phase 01
 
 **Recommendation:** **Option A (owner-only while draft)**. It respects draft semantics and leaves Phases 04–05 purely additive (publish, then public/unlisted, then anonymous). Streaming and download are still fully exercised end to end by the owner.
 
-**Decision:** _[pending]_
+**Decision:** A
 
 ---
 
@@ -428,7 +436,12 @@ _Inherited constraints (not reopened):_ PostgreSQL 17 + TypeORM 0.3.28 (Phase 01
 
 **Recommendation:** **Option B (orthogonal `processing_status` + `publication_status`)**. Phase 04's "rascunho → publicação" flow is independent from processing, and modeling them separately now avoids a data migration and enum redefinition next phase. Failure details are stored in a nullable `processing_error` column for diagnosis (TD-15).
 
-**Decision:** _[pending]_
+**Decision:** B
+**Libraries:** —
+
+**Revisions:**
+
+- 2026-09-23 — Pré-cadastro do rascunho: o vídeo pertence ao canal do usuário autenticado (`channel_id`); `title` default = nome do arquivo original sem extensão; `description` nula; `publication_status = draft` e `processing_status` no estado inicial de upload. A Fase 03 não expõe endpoint de edição de metadados editoriais (título/descrição) — edição e fluxo rascunho→publicação ficam exclusivamente na Fase 04. _Rationale:_ clarificação de escopo e fronteira com a Fase 04 (AMB-1 de validation.md).
 
 ---
 
@@ -454,7 +467,7 @@ _Inherited constraints (not reopened):_ PostgreSQL 17 + TypeORM 0.3.28 (Phase 01
 
 **Recommendation:** **Option A (bounded retries + idempotent processor + multipart lifecycle rule)**. BullMQ already provides attempts, exponential backoff, `jobId` deduplication and `UnrecoverableError` (TD-01), so the only new code is error classification and the final `failed` transition. Storage-side expiry of stale multipart uploads (MinIO env locally, lifecycle rule on S3) answers the plan's storage-cost concern for abandoned 10 GB uploads without writing a scheduler.
 
-**Decision:** _[pending]_
+**Decision:** A
 
 ---
 
@@ -462,18 +475,18 @@ _Inherited constraints (not reopened):_ PostgreSQL 17 + TypeORM 0.3.28 (Phase 01
 
 | ID | Scope | Decision | Recommendation | Choice |
 |----|-------|----------|---------------|--------|
-| TD-01 | Backend | Queue technology | A — BullMQ 6 + Redis via `@nestjs/bullmq` 11.x (CJS) | _[pending]_ |
-| TD-02 | Backend | Worker runtime topology | A — same codebase, second entrypoint, separate Compose service | _[pending]_ |
-| TD-03 | Repo-wide | Object storage runtime image | A — MinIO from `quay.io`, pinned last community release | _[pending]_ |
-| TD-04 | Backend | Storage layout (buckets/keys/thumbnails) | B — private `videos` + public-read `thumbnails` | _[pending]_ |
-| TD-05 | Cross-layer | Presigned URL host resolution in Docker | A — internal `S3_ENDPOINT` + client-facing `S3_PUBLIC_ENDPOINT` | _[pending]_ |
-| TD-06 | Cross-layer | Upload protocol for 10 GB | A — S3 multipart with presigned part URLs | _[pending]_ |
-| TD-07 | Cross-layer | Upload limits contract | A — server-dictated fixed part size | _[pending]_ |
-| TD-08 | Backend | Upload completion & processing trigger | A — explicit completion endpoint | _[pending]_ |
-| TD-09 | Backend | FFmpeg integration | A — system FFmpeg + `execFile` wrapper | _[pending]_ |
-| TD-10 | Backend | Worker source-file access | A — FFmpeg reads internal presigned URL | _[pending]_ |
-| TD-11 | Cross-layer | Unique video URL identifier | B — random 11-char base64url slug + unique index | _[pending]_ |
-| TD-12 | Cross-layer | Streaming & download delivery | A — 302 to presigned GET (+ `attachment` override) | _[pending]_ |
-| TD-13 | Backend | Stream/download access before publication | A — owner-only while draft | _[pending]_ |
-| TD-14 | Backend | Video status model | B — orthogonal `processing_status` + `publication_status` | _[pending]_ |
-| TD-15 | Backend | Failure, retry & abandoned-upload policy | A — bounded retries + `UnrecoverableError` + idempotent processor + storage-side stale-upload expiry | _[pending]_ |
+| TD-01 | Backend | Queue technology | A — BullMQ 6 + Redis via `@nestjs/bullmq` 11.x (CJS) | A |
+| TD-02 | Backend | Worker runtime topology | A — same codebase, second entrypoint, separate Compose service | A |
+| TD-03 | Repo-wide | Object storage runtime image | A — MinIO from `quay.io`, pinned last community release | A |
+| TD-04 | Backend | Storage layout (buckets/keys/thumbnails) | B — private `videos` + public-read `thumbnails` | B |
+| TD-05 | Cross-layer | Presigned URL host resolution in Docker | A — internal `S3_ENDPOINT` + client-facing `S3_PUBLIC_ENDPOINT` | A |
+| TD-06 | Cross-layer | Upload protocol for 10 GB | A — S3 multipart with presigned part URLs | A |
+| TD-07 | Cross-layer | Upload limits contract | A — server-dictated fixed part size | A |
+| TD-08 | Backend | Upload completion & processing trigger | A — explicit completion endpoint | A |
+| TD-09 | Backend | FFmpeg integration | A — system FFmpeg + `execFile` wrapper | A |
+| TD-10 | Backend | Worker source-file access | A — FFmpeg reads internal presigned URL | A |
+| TD-11 | Cross-layer | Unique video URL identifier | B — random 11-char base64url slug + unique index | B |
+| TD-12 | Cross-layer | Streaming & download delivery | A — 302 to presigned GET (+ `attachment` override) | A |
+| TD-13 | Backend | Stream/download access before publication | A — owner-only while draft | A |
+| TD-14 | Backend | Video status model | B — orthogonal `processing_status` + `publication_status` | B |
+| TD-15 | Backend | Failure, retry & abandoned-upload policy | A — bounded retries + `UnrecoverableError` + idempotent processor + storage-side stale-upload expiry | A |
