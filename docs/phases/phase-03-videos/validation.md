@@ -1,11 +1,11 @@
 ---
 kind: phase
 name: phase-03-videos
-status: dirty
+status: clean
 issue_count: 0
 sources_mtime:
-  docs/phases/phase-03-videos/context.md: "2026-09-23T17:06:01-03:00"
-  docs/decisions/technical-decisions-phase-03-videos.md: "2026-09-23T08:13:16-03:00"
+  docs/phases/phase-03-videos/context.md: "2026-09-23T18:21:36-03:00"
+  docs/decisions/technical-decisions-phase-03-videos.md: "2026-09-23T18:19:32-03:00"
 issues:
   - id: AMB-1
     status: resolved
