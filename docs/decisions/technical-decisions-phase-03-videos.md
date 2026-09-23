@@ -2,7 +2,7 @@
 scope_type: phase
 related_phases: [3]
 status: pending
-date: 2026-09-22
+date: 2026-09-23
 scope_description: "Backend foundation for video upload and processing: queue technology, worker topology, object storage runtime/layout/presigning, 10GB resumable upload protocol and limits, processing trigger, FFmpeg integration, unique video URL, streaming/download delivery and access, status model, and failure/retry policy."
 ---
 
@@ -13,7 +13,11 @@ _Subprojects in scope:_
 - `nestjs-project/` — receives the new `videos` module (entity + migration linked to `channels`), the storage and queue integrations, the video worker entrypoint, and the new Compose services (object storage, queue broker, worker). Every TD below applies to it.
 - `next-frontend/` — no open decision in this document. The Phase 03 challenge (`docs/desafio-fase-03.md`) explicitly puts the video UI out of scope. The Cross-layer TDs (TD-06, TD-07, TD-11, TD-12) set the HTTP contract that a later frontend phase will consume through the BFF (`next-frontend-config-base/TD-03`). That TD already expected object-storage bytes to travel over presigned URLs rather than through the BFF.
 
-_Research sources:_ this research used primary sources fetched from the web: the NestJS queues docs, the BullMQ PostgreSQL backend guide, the npm registry, Docker Hub and quay.io tag APIs, and the fluent-ffmpeg repository. **Discrepancy flag:** the project's `CLAUDE.md` requires context7 lookups, but no context7 MCP server is configured in `.mcp.json` (only `postgres`). `/plan-resolve` must confirm pinned library versions against official docs before writing `library-refs.md`.
+_Research sources (context7, 2026-09-23):_ `/nestjs/docs.nestjs.com` (queues, standalone application context, lifecycle), `/nestjs/bull` (`@nestjs/bullmq` API), `/taskforcesh/bullmq` (retries, `UnrecoverableError`, deduplication, going-to-production, PostgreSQL backend), `/aws/aws-sdk-js-v3` (`getSignedUrl`, multipart commands, `forcePathStyle`, `ResponseContentDisposition`), `/minio/docs` + `/minio/minio` (`mc anonymous`, `mc ilm`, stale-upload expiry), `/tus/tus-node-server` (`S3Store`, lockers), `/websites/ffmpeg_documentation` (HTTP protocol seeking), `/fluent-ffmpeg/node-fluent-ffmpeg` (deprecation notice). Other primary sources: the npm registry (versions, `type`, peer ranges, release dates), the packed `@nestjs/bullmq@12.0.0` / `@11.0.5` tarballs, and the Docker Hub and quay.io tag APIs.
+
+_Installed baseline (`nestjs-project/package-lock.json`):_ `@nestjs/core`/`common` 11.1.16, `typeorm` 0.3.28, `typescript` 5.9.3, `@nestjs/config` 4.0.3. The project compiles as CommonJS (`module: nodenext`, no `"type": "module"`), runs on `node:25.6.0-slim`, and tests with `ts-jest` 29.
+
+_Changes from the 2026-09-22 draft (made without context7):_ same TDs and recommendations. Corrected facts: `@nestjs/bullmq@12` is ESM-only (TD-01). `@nestjs/bullmq` *can* reach the BullMQ PostgreSQL backend through `setDefaultBackendFactory` (TD-01 Option B). Redis must run with `maxmemory-policy noeviction` (TD-01). `forcePathStyle` is required for MinIO (TD-05). MinIO expires stale multipart uploads on its own through `MINIO_API_STALE_UPLOADS_EXPIRY`, while AWS S3 needs a lifecycle rule (TD-15). Permanent failures use BullMQ's `UnrecoverableError` (TD-15).
 
 _Inherited constraints (not reopened):_ PostgreSQL 17 + TypeORM 0.3.28 (Phase 01); `@nestjs/config` + Joi env validation with namespaced `registerAs` configs (`phase-01-configuracao-base/TD-01..TD-04`); custom JWT guard with global auth and `@Public()` opt-out (`phase-02-auth/TD-02`); domain exception filter and error envelope (`phase-02-auth/TD-07`); class-validator DTOs (`phase-02-auth/TD-06`); `@nestjs/throttler` (`phase-02-auth/TD-08`); Compose service names as hosts (root `CLAUDE.md`).
 
@@ -30,26 +34,26 @@ _Inherited constraints (not reopened):_ PostgreSQL 17 + TypeORM 0.3.28 (Phase 01
 **Options:**
 
 ### Option A: BullMQ + Redis via `@nestjs/bullmq`
-- The official NestJS queue integration (`BullModule.forRoot/registerQueue`, `@Processor` + `WorkerHost`). Jobs live in Redis. `@nestjs/bullmq@11.0.5` (CJS, peer `@nestjs/core ^11`) supports `bullmq ^6`. Adds one Compose service (`redis`, or the BSD-licensed `valkey`, which is wire-compatible).
-- **Pros:** Documented in the NestJS docs as the recommended queue. Most battle-tested BullMQ backend. Attempts, exponential backoff, job-id deduplication, stalled-job recovery and `failed`/`completed` events are built in. The worker side works through `createApplicationContext` with no HTTP server.
-- **Cons:** One more stateful container to run and test against. Jobs live outside PostgreSQL, so enqueueing cannot share a transaction with the `videos` row. That needs an ordering rule: commit first, then enqueue, with idempotent processing.
+- The official NestJS queue integration (`BullModule.forRootAsync` + `registerQueue`, `@InjectQueue`, `@Processor` + `WorkerHost`). Jobs live in Redis. Adds one Compose service (`redis`, or the BSD-licensed `valkey`, which is wire-compatible). **Version constraint:** `@nestjs/bullmq@12.0.0` accepts Nest 11 but is ESM-only (`"type": "module"`). `@nestjs/bullmq@11.0.5` is CommonJS with peers `@nestjs/* ^10 || ^11` and `bullmq ^3–^6`, so it matches this CJS/`ts-jest` project.
+- **Pros:** Documented in the NestJS docs as the recommended queue. Most battle-tested BullMQ backend. Attempts, exponential backoff, `jobId`/`deduplication` handling, stalled-job recovery, `UnrecoverableError` and `failed`/`completed` events are built in. The worker side works through `createApplicationContext` with no HTTP server.
+- **Cons:** One more stateful container to run and test against. BullMQ's production guide says it is correct only with Redis `maxmemory-policy noeviction`, and recommends AOF persistence. Both are Compose `command` flags. Jobs live outside PostgreSQL, so enqueueing cannot share a transaction with the `videos` row. That needs an ordering rule: commit first, then enqueue, with idempotent processing.
 
 ### Option B: BullMQ 6 with its PostgreSQL backend
-- BullMQ 6 (Aug 2026) adds an `IQueueBackend` abstraction. `createPostgresBackend` runs the same Queue/Worker API on PostgreSQL ≥13, using `LISTEN/NOTIFY` for blocking waits and tables in a `bullmq` schema created by `runMigrations()`.
-- **Pros:** No new container, because Postgres is already in the stack. Same BullMQ API and feature set (retries, delayed jobs, flows).
-- **Cons:** Brand new: the docs themselves call Redis "the most battle-tested option". `@nestjs/bullmq` (11.0.5 and 12.0.0) builds queues with `new Queue(name, options)` and never passes a backend factory, so the Nest decorators cannot use this backend. It would need manual wiring. It also adds a second schema whose migrations run outside TypeORM, which affects the test-database truncation strategy.
+- BullMQ 6.0.0 (released 2026-07-30) adds a pluggable backend. `createPostgresBackend` runs the same Queue/Worker/QueueEvents API on PostgreSQL ≥13 (≥14 recommended), with tables created by the idempotent `runMigrations()`. `setDefaultBackendFactory(createPostgresBackend)` makes it the process-wide default.
+- **Pros:** No new container, because Postgres 17 is already in the stack. Same BullMQ API and feature set (retries, delayed jobs, flows). `@nestjs/bullmq` constructs `Queue`/`Worker` without a backend argument, so the process-wide default could route the Nest decorators to Postgres.
+- **Cons:** Less than two months old (current 6.3.8). Throughput is lower than Redis, and the docs present the backend as an option for teams avoiding Redis. The `@nestjs/bullmq` connection options are typed for Redis, so the combination is undocumented and unverified. It needs a global side effect set before module init in both entrypoints. It also adds a second schema whose migrations run outside TypeORM, which affects the test-database truncation strategy.
 
 ### Option C: pg-boss
-- A job queue on PostgreSQL (`SKIP LOCKED`). v12.33 is ESM-only and requires Node ≥22.12.
+- A job queue on PostgreSQL (`SKIP LOCKED`). v12.33.6 is ESM-only (`"type": "module"`) and requires Node ≥22.12.
 - **Pros:** No new container. Mature (years in production). Retries, backoff and dead-letter queues included.
-- **Cons:** No official NestJS module: lifecycle, DI and graceful shutdown are hand-written. ESM-only in a CJS `nodenext` project works through `require(esm)` (Node 25 + TS 5.9), but it is a new interop surface. The challenge brief asks for a real queue service in Compose, and here the "queue" would be tables in `db`, which weakens the architecture diagram's separate Message Queue container.
+- **Cons:** No official NestJS module: lifecycle, DI and graceful shutdown are hand-written. ESM-only in a CJS `nodenext` project works at runtime through `require(esm)` (Node 25), but it is a new interop surface for `ts-jest`. The challenge brief asks for a real queue service in Compose, and here the "queue" would be tables in `db`, which weakens the architecture diagram's separate Message Queue container.
 
 ### Option D: RabbitMQ via `@nestjs/microservices`
 - An AMQP broker container. The worker is a Nest microservice consuming a durable queue.
 - **Pros:** A real message broker with strong delivery semantics, and an official Nest transport.
 - **Cons:** No built-in delayed retry or backoff: it needs dead-letter exchanges and TTL plumbing. The Nest RMQ transport is RPC/event-oriented, not job-oriented, so there is no job state, attempts or progress. The heaviest option for a single job type.
 
-**Recommendation:** **Option A (BullMQ + Redis via `@nestjs/bullmq`)**. It is the only option with first-party NestJS support that works with the installed Nest 11. It gives retries, backoff and job-id deduplication without custom code, and it realizes the diagram's separate Message Queue container. The Redis container cost is small next to the storage and worker containers this phase adds anyway. Option B is attractive, but it is weeks old and not wired through `@nestjs/bullmq`, which is too much risk for the phase's core infrastructure. The job payload should carry only `{ videoId }`, with the DB as the source of truth. That keeps the queue replaceable later.
+**Recommendation:** **Option A (BullMQ + Redis via `@nestjs/bullmq`)**. It is the only option with first-party NestJS support that works with the installed Nest 11. It gives retries, backoff and job-id deduplication without custom code, and it realizes the diagram's separate Message Queue container. The Redis container cost is small next to the storage and worker containers this phase adds anyway. Option B is attractive and technically reachable through `setDefaultBackendFactory`, but its combination with `@nestjs/bullmq` is undocumented and the backend is weeks old. That is too much risk for the phase's core infrastructure. Pin the CommonJS `@nestjs/bullmq@11.x` line (12.x is ESM-only) together with `bullmq@6`, and run Redis with `noeviction` + AOF. The job payload should carry only `{ videoId }`, with the DB as the source of truth. That keeps the queue replaceable later, including a move to Option B once it matures.
 
 **Decision:** _[pending]_
 
@@ -68,7 +72,7 @@ _Inherited constraints (not reopened):_ PostgreSQL 17 + TypeORM 0.3.28 (Phase 01
 ### Option A: Same codebase, second entrypoint, separate Compose service
 - `nestjs-project/src/worker.ts` boots `NestFactory.createApplicationContext(WorkerModule)`, with no HTTP listener. `WorkerModule` imports the shared config, database, storage and videos-processing providers. A `video-worker` Compose service reuses the project's image, adds `ffmpeg`, and runs this entrypoint.
 - **Pros:** No duplicated entities, config schema or storage client. One `package.json`, one test/lint/tsc pipeline, so the Definition of Done covers the worker automatically. Scales independently (`docker compose up --scale video-worker=N`). Matches the diagram.
-- **Cons:** The worker image carries API dependencies it does not use. Module boundaries must keep HTTP-only providers (controllers, throttler, guards) out of `WorkerModule`.
+- **Cons:** The worker image carries API dependencies it does not use. Module boundaries must keep HTTP-only providers (controllers, throttler, guards) out of `WorkerModule`. The NestJS docs note that a standalone context does not apply guards or interceptors anyway. Graceful shutdown (closing the BullMQ worker on `SIGTERM`) needs `enableShutdownHooks()`/`app.close()` in the worker's bootstrap.
 
 ### Option B: Processor inside the API process (`@Processor` registered in `AppModule`)
 - The API container also consumes the queue, optionally in sandboxed child processes (`processors: [path]`).
@@ -134,7 +138,7 @@ _Inherited constraints (not reopened):_ PostgreSQL 17 + TypeORM 0.3.28 (Phase 01
 
 ### Option B: Two buckets — private `videos`, public-read `thumbnails`
 - `videos` (private; keys `{videoId}/original`) is accessed only via presigned URLs (TD-12). `thumbnails` (anonymous read; keys `{videoId}.jpg`) is served by a stable public URL.
-- **Pros:** Thumbnails get stable, cacheable URLs with no signing cost in listings. The original stays private. Lifecycle rules, such as aborting incomplete multipart uploads (TD-15), apply only to `videos`.
+- **Pros:** Thumbnails get stable, cacheable URLs with no signing cost in listings. The original stays private. Storage-cost rules for large objects, such as expiring incomplete multipart uploads on S3 (TD-15), apply only to `videos`. The init job's `mc anonymous set download <alias>/thumbnails` grants anonymous read on thumbnails only.
 - **Cons:** Two buckets and a bucket policy in the init job. A thumbnail URL is readable by anyone who knows the key. Keys use the UUID, not the public slug, so they are not enumerable. The Phase 04 custom thumbnail lands in the same public bucket.
 
 **Recommendation:** **Option B (private `videos` + public-read `thumbnails`)**. Thumbnails are display assets meant to be visible, and listings in Phases 04–07 would otherwise presign dozens of URLs per page and lose all caching. Keys use the internal UUID (`videoId`), not the public slug (TD-11), so storage paths never depend on a URL-facing identifier.
@@ -155,7 +159,7 @@ _Inherited constraints (not reopened):_ PostgreSQL 17 + TypeORM 0.3.28 (Phase 01
 
 ### Option A: Two S3 clients — internal endpoint for operations, public endpoint for client-facing presigning
 - `S3_ENDPOINT=http://minio:9000` is used for all server-side calls and for URLs the worker consumes. `S3_PUBLIC_ENDPOINT=http://localhost:9000` is used only to presign URLs returned to external clients. Presigning is an offline computation, so the API never needs network access to the public host.
-- **Pros:** Honors the service-name rule for all container-to-container traffic. No extra infra. In production, both keys point to the real S3 endpoint.
+- **Pros:** Honors the service-name rule for all container-to-container traffic. No extra infra. In production, both keys point to the real S3 endpoint. Both clients use `forcePathStyle: true` for MinIO: the SDK otherwise builds virtual-hosted `bucket.minio` hostnames that neither side can resolve.
 - **Cons:** Two configured clients, and code must pick the right one (internal for worker URLs, public for API responses). One more env key.
 
 ### Option B: One hostname reachable from both host and containers
@@ -185,14 +189,14 @@ _Inherited constraints (not reopened):_ PostgreSQL 17 + TypeORM 0.3.28 (Phase 01
 **Options:**
 
 ### Option A: S3 multipart upload with presigned part URLs (API orchestrates, bytes go straight to storage)
-- `POST /videos` creates the draft row and calls `CreateMultipartUpload`, returning `videoId`, `uploadId`, part size and part count. The client requests presigned `UploadPart` URLs (in batches), `PUT`s each part directly to storage and collects `ETag`s, then calls a completion endpoint (TD-08). Resume uses `ListParts` to find which parts already landed.
+- `POST /videos` creates the draft row and calls `CreateMultipartUpload`, returning `videoId`, `uploadId`, part size and part count. The client requests presigned `UploadPart` URLs in batches (`getSignedUrl(client, new UploadPartCommand({ …, PartNumber, UploadId }), { expiresIn })` from `@aws-sdk/s3-request-presigner`; `PartNumber` 1–10000). It `PUT`s each part directly to storage and collects `ETag`s, then calls a completion endpoint (TD-08). Resume uses `ListParts` to find which parts already landed.
 - **Pros:** Zero video bytes cross the API: the Node process handles only small JSON calls, so upload volume has no effect on API performance. Resumable per part, with parallel part uploads. Native S3 protocol, identical on MinIO and AWS. Supports objects far beyond 10 GB.
 - **Cons:** The client must implement chunking, parallelism and resume against a custom handshake: no off-the-shelf standard client without an adapter (Uppy's `@uppy/aws-s3` supports this flow). Needs storage CORS exposing `ETag` (TD-05). Abandoned uploads leave orphan parts (TD-15).
 
 ### Option B: tus resumable protocol via `@tus/server` + `@tus/s3-store` inside the API
 - The API mounts a tus endpoint. Clients use `tus-js-client`/Uppy. The API streams each chunk to S3 multipart through `@tus/s3-store`.
 - **Pros:** An open, standardized resumable protocol with mature clients. Resume semantics come for free (`HEAD` offset).
-- **Cons:** All 10 GB still flow through the API process: streamed, not buffered, but it consumes API bandwidth, sockets and event-loop time, which the challenge explicitly warns against. Horizontal scaling needs shared locking for tus. `@tus/s3-store` also buffers parts to local disk before upload.
+- **Cons:** All 10 GB still flow through the API process: streamed, not buffered, but it consumes API bandwidth, sockets and event-loop time, which the challenge explicitly warns against. The default `MemoryLocker` is per-process, so horizontal scaling needs a shared (e.g. Redis) locker. `@tus/s3-store` also buffers each `partSize` chunk to local disk before upload. `@tus/server@2` is ESM-only, the same interop cost as `pg-boss`.
 
 **Recommendation:** **Option A (S3 multipart with presigned part URLs)**. It is the only option that keeps the API entirely out of the data path, which is the core non-functional requirement of the phase. It resumes at part granularity and works unchanged on S3 in production. The cost of a custom handshake falls on a future frontend phase, where Uppy's S3 multipart plugin already covers it. The BFF only relays the small JSON calls.
 
@@ -211,7 +215,7 @@ _Inherited constraints (not reopened):_ PostgreSQL 17 + TypeORM 0.3.28 (Phase 01
 **Options:**
 
 ### Option A: Server-dictated fixed part size, server-computed part count
-- The client declares `fileName`, `fileSize` and `contentType` when creating the upload. The API rejects `fileSize > MAX_VIDEO_SIZE_BYTES` (10 GiB) and non-`video/*` types, then returns `partSize` (env `UPLOAD_PART_SIZE_BYTES`, e.g. 64 MiB → at most 160 parts for 10 GiB) and `partCount`. It only presigns part numbers `1..partCount`. At completion, `HeadObject` checks the real `ContentLength ≤ MAX_VIDEO_SIZE_BYTES`. Presigned part URLs expire after `UPLOAD_URL_EXPIRES_SECONDS` (e.g. 1 h), and the client asks for more when needed.
+- The client declares `fileName`, `fileSize` and `contentType` when creating the upload. The API rejects `fileSize > MAX_VIDEO_SIZE_BYTES` (10 GiB) and non-`video/*` types, then returns `partSize` (env `UPLOAD_PART_SIZE_BYTES`, e.g. 64 MiB → at most 160 parts for 10 GiB) and `partCount`. It only presigns part numbers `1..partCount`. At completion, `HeadObject` checks the real `ContentLength ≤ MAX_VIDEO_SIZE_BYTES`. Presigned part URLs expire after `UPLOAD_URL_EXPIRES_SECONDS` (e.g. 1 h; the presigner's default is 900 s, so this must be passed explicitly as `expiresIn`), and the client asks for more when needed.
 - **Pros:** One source of truth for the chunking math. The server bounds the number of signable parts, so a client cannot write unbounded data. Part size can be tuned via env without changing clients.
 - **Cons:** One size for every network. 64 MiB parts retry slowly on bad connections.
 
@@ -264,13 +268,13 @@ _Inherited constraints (not reopened):_ PostgreSQL 17 + TypeORM 0.3.28 (Phase 01
 
 ### Option A: System `ffmpeg`/`ffprobe` (installed via `apt` in the worker image) + a thin `execFile` wrapper
 - The worker image installs Debian's `ffmpeg` package. A small injectable service runs `ffprobe -v error -print_format json -show_format -show_streams <input>` and parses the JSON. It runs `ffmpeg -ss <t> -i <input> -frames:v 1 -vf scale=… <out>.jpg` for the thumbnail. `execFile` takes an argument array, so there is no shell interpolation.
-- **Pros:** No npm dependency. Machine-readable JSON output from ffprobe. Full control of arguments and timeouts. Security updates come with the base image. Easy to unit-test by mocking the wrapper, and to integration-test with a real binary in the container.
+- **Pros:** No npm dependency. Machine-readable JSON output from ffprobe. Full control of arguments and timeouts. FFmpeg runs in a child process, so the worker's event loop stays free to renew BullMQ job locks. BullMQ docs list a CPU-blocked event loop as the cause of stalled, double-processed jobs. Security updates come with the base image. Easy to unit-test by mocking the wrapper, and to integration-test with a real binary in the container.
 - **Cons:** We own the small wrapper, its argument building and its JSON typing.
 
 ### Option B: `fluent-ffmpeg`
 - The long-standing fluent API wrapper around the binaries.
 - **Pros:** A familiar API with many examples.
-- **Cons:** Archived and self-declared broken with recent FFmpeg. No fixes will come. Not acceptable for new code.
+- **Cons:** Its README (via context7) says it is "deprecated… no longer maintained and no longer works properly with recent ffmpeg versions", and npm marks 2.1.3 "no longer supported". No fixes will come. Not acceptable for new code.
 
 ### Option C: npm-bundled binaries (`ffmpeg-static` / `ffprobe-static`) + `execFile`
 - Static binaries are downloaded at `npm install`. The wrapper is the same as in A.
@@ -294,7 +298,7 @@ _Inherited constraints (not reopened):_ PostgreSQL 17 + TypeORM 0.3.28 (Phase 01
 **Options:**
 
 ### Option A: FFmpeg reads directly from an internal presigned GET URL
-- The worker presigns a short-lived GET with the internal client (`http://minio:9000`, TD-05) and passes the URL as `-i`. FFmpeg's HTTP protocol seeks with `Range` requests.
+- The worker presigns a short-lived GET with the internal client (`http://minio:9000`, TD-05) and passes the URL as `-i`. FFmpeg's `http` protocol detects seekability from the server response (`seekable=-1` by default) and seeks with `Range` requests. Reconnect options cover transient drops.
 - **Pros:** Reads only the bytes it needs: header, index and one keyframe region. Typically a few MB even for 10 GB files. No temp disk, and the job takes seconds. Behaves the same against S3 in production.
 - **Cons:** Many range requests if the index is fragmented. The worker needs network access to storage throughout the job, which it has anyway.
 
@@ -356,7 +360,7 @@ _Inherited constraints (not reopened):_ PostgreSQL 17 + TypeORM 0.3.28 (Phase 01
 **Options:**
 
 ### Option A: API authorizes, storage serves — `302` redirect to a presigned GET URL
-- `GET /videos/{slug}/stream` → `302 Location: <presigned GET>`. Storage answers `Range` with `206` natively. `GET /videos/{slug}/download` → `302` to a presigned GET with the response override `response-content-disposition=attachment; filename="…"`. URLs are signed with the public endpoint (TD-05) and expire after `STREAM_URL_EXPIRES_SECONDS` (e.g. 6 h, long enough for a viewing session with seeks).
+- `GET /videos/{slug}/stream` → `302 Location: <presigned GET>`. Storage answers `Range` with `206` natively. `GET /videos/{slug}/download` → `302` to a presigned `GetObjectCommand` with `ResponseContentDisposition: 'attachment; filename="…"'`, which the SDK encodes as the `response-content-disposition` query override. URLs are signed with the public endpoint (TD-05) and expire after `STREAM_URL_EXPIRES_SECONDS` (e.g. 6 h, long enough for a viewing session with seeks).
 - **Pros:** No video bytes through the API, and seeking comes from S3/MinIO's `Range` support at no cost. Authorization stays in the API, because the redirect is issued only after the access checks (TD-13). The endpoint URL stays stable for `<video src>` while the signed target rotates. Works unchanged with a CDN in front of S3 later.
 - **Cons:** When a URL expires mid-session, the player must re-request the stable endpoint to get a fresh one. The storage host becomes visible to clients.
 
@@ -439,16 +443,16 @@ _Inherited constraints (not reopened):_ PostgreSQL 17 + TypeORM 0.3.28 (Phase 01
 **Options:**
 
 ### Option A: Bounded automatic retries with backoff, idempotent processor, lifecycle cleanup of orphan parts
-- Jobs are enqueued with `attempts` (e.g. 3) and exponential backoff, deduplicated by `jobId = videoId`. The processor is idempotent: it skips if already `ready`, and the thumbnail key is deterministic so a rewrite overwrites. Permanent errors (ffprobe finds no video stream) skip the remaining attempts and go straight to failure. After the final failure, the worker sets `processing_status = failed` and records `processing_error`. The init step sets a lifecycle rule on the `videos` bucket, `AbortIncompleteMultipartUpload` after N days (e.g. 1). Stale `awaiting_upload` rows are left for Phase 04's management panel, which shows the status.
-- **Pros:** Recovers transient failures automatically and fails fast on bad input. Duplicate delivery (at-least-once) is harmless. Orphan parts are reclaimed by storage itself, with no cron code.
-- **Cons:** Needs a typed error classification (transient vs permanent) in the processor. Retry and backoff values become config to tune.
+- Jobs are enqueued with `attempts` (e.g. 3) and `backoff: { type: 'exponential', delay }`, deduplicated by `jobId = videoId`. The processor is idempotent: it skips if already `ready`, and the thumbnail key is deterministic so a rewrite overwrites. Permanent errors (ffprobe finds no video stream) throw BullMQ's `UnrecoverableError`, which moves the job straight to failed and ignores the remaining attempts. After the final failure (the worker's `failed` event with `attemptsMade ≥ attempts`, or unrecoverable), the worker sets `processing_status = failed` and records `processing_error`. Orphan multipart parts are reclaimed by storage itself. Locally, MinIO has this built in: `MINIO_API_STALE_UPLOADS_EXPIRY` (default `24h`, swept every `6h`) is set explicitly in `compose.yaml`. On AWS S3 the equivalent is a bucket lifecycle rule `AbortIncompleteMultipartUpload`, a deploy-time concern. Stale `awaiting_upload` rows are left for Phase 04's management panel, which shows the status.
+- **Pros:** Recovers transient failures automatically and fails fast on bad input with a first-class BullMQ primitive. Duplicate delivery (at-least-once, including stalled-job redelivery) is harmless. Orphan parts are reclaimed without cron code.
+- **Cons:** Needs a typed error classification (transient vs permanent) in the processor. Retry and backoff values become config to tune. `jobId` deduplication only holds while the job is kept: BullMQ warns that `removeOnComplete`/`removeOnFail` let a same-id job be re-added. Retention must be chosen with that in mind, and the processor's idempotency is the real guard. The orphan-part cleanup mechanism differs between MinIO (server env) and S3 (lifecycle rule).
 
 ### Option B: No automatic retry — fail immediately, manual re-trigger
 - A single attempt. Any error marks the video `failed`. A later endpoint could re-enqueue.
 - **Pros:** The simplest processor. No retry configuration.
 - **Cons:** A transient blip permanently fails a 10 GB upload that is perfectly valid. The re-trigger endpoint is not in the phase's capabilities, so users would have to re-upload.
 
-**Recommendation:** **Option A (bounded retries + idempotent processor + multipart lifecycle rule)**. BullMQ already provides attempts, backoff and job-id deduplication (TD-01), so the only new code is error classification and the final `failed` transition. The lifecycle rule answers the plan's storage-cost concern for abandoned 10 GB uploads without writing a scheduler.
+**Recommendation:** **Option A (bounded retries + idempotent processor + multipart lifecycle rule)**. BullMQ already provides attempts, exponential backoff, `jobId` deduplication and `UnrecoverableError` (TD-01), so the only new code is error classification and the final `failed` transition. Storage-side expiry of stale multipart uploads (MinIO env locally, lifecycle rule on S3) answers the plan's storage-cost concern for abandoned 10 GB uploads without writing a scheduler.
 
 **Decision:** _[pending]_
 
@@ -458,7 +462,7 @@ _Inherited constraints (not reopened):_ PostgreSQL 17 + TypeORM 0.3.28 (Phase 01
 
 | ID | Scope | Decision | Recommendation | Choice |
 |----|-------|----------|---------------|--------|
-| TD-01 | Backend | Queue technology | A — BullMQ + Redis via `@nestjs/bullmq` | _[pending]_ |
+| TD-01 | Backend | Queue technology | A — BullMQ 6 + Redis via `@nestjs/bullmq` 11.x (CJS) | _[pending]_ |
 | TD-02 | Backend | Worker runtime topology | A — same codebase, second entrypoint, separate Compose service | _[pending]_ |
 | TD-03 | Repo-wide | Object storage runtime image | A — MinIO from `quay.io`, pinned last community release | _[pending]_ |
 | TD-04 | Backend | Storage layout (buckets/keys/thumbnails) | B — private `videos` + public-read `thumbnails` | _[pending]_ |
@@ -472,4 +476,4 @@ _Inherited constraints (not reopened):_ PostgreSQL 17 + TypeORM 0.3.28 (Phase 01
 | TD-12 | Cross-layer | Streaming & download delivery | A — 302 to presigned GET (+ `attachment` override) | _[pending]_ |
 | TD-13 | Backend | Stream/download access before publication | A — owner-only while draft | _[pending]_ |
 | TD-14 | Backend | Video status model | B — orthogonal `processing_status` + `publication_status` | _[pending]_ |
-| TD-15 | Backend | Failure, retry & abandoned-upload policy | A — bounded retries + idempotent processor + lifecycle rule | _[pending]_ |
+| TD-15 | Backend | Failure, retry & abandoned-upload policy | A — bounded retries + `UnrecoverableError` + idempotent processor + storage-side stale-upload expiry | _[pending]_ |
