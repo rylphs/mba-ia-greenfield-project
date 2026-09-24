@@ -139,7 +139,7 @@ Deliver the backend foundation for videos — object storage for videos and thum
 ### SI-03.5 — Endpoint POST /videos (pré-cadastro do rascunho + início do multipart)
 
 **Route:** POST /videos
-**Test Specs:** _pending /plan-test-specs_
+**Test Specs:** see `nestjs-project/specs/videos-create.plan.md`
 **Authorization:** Authenticated (per `### Authorization Matrix`)
 
 **Description:** Ao iniciar o upload, pré-cadastra o vídeo como rascunho no canal do usuário, gera o slug público e abre o multipart upload direto no storage, retornando o contrato de chunking ditado pelo servidor.
@@ -179,7 +179,7 @@ Deliver the backend foundation for videos — object storage for videos and thum
 ### SI-03.6 — Endpoint POST /videos/{id}/upload/parts (URLs pré-assinadas de parts)
 
 **Route:** POST /videos/{id}/upload/parts
-**Test Specs:** _pending /plan-test-specs_
+**Test Specs:** see `nestjs-project/specs/videos-upload-parts-presign.plan.md`
 **Authorization:** Owner (per `### Authorization Matrix`)
 
 **Description:** Entrega ao dono do vídeo, em lotes, URLs pré-assinadas de `UploadPart` para que os bytes vão direto ao storage sem passar pela API.
@@ -214,7 +214,7 @@ Deliver the backend foundation for videos — object storage for videos and thum
 ### SI-03.7 — Endpoint GET /videos/{id}/upload/parts (retomada do upload)
 
 **Route:** GET /videos/{id}/upload/parts
-**Test Specs:** _pending /plan-test-specs_
+**Test Specs:** see `nestjs-project/specs/videos-upload-parts-list.plan.md`
 **Authorization:** Owner (per `### Authorization Matrix`)
 
 **Description:** Permite ao cliente retomar um upload interrompido consultando quais parts já chegaram ao storage (`ListParts`).
@@ -270,7 +270,7 @@ Deliver the backend foundation for videos — object storage for videos and thum
 ### SI-03.9 — Endpoint POST /videos/{id}/upload/complete (conclusão + disparo do processamento)
 
 **Route:** POST /videos/{id}/upload/complete
-**Test Specs:** _pending /plan-test-specs_
+**Test Specs:** see `nestjs-project/specs/videos-upload-complete.plan.md`
 **Authorization:** Owner (per `### Authorization Matrix`)
 
 **Description:** Conclui o multipart, verifica o tamanho real, muda o vídeo para `processing` e só então enfileira o job — a chamada explícita do cliente é o gatilho do processamento.
@@ -398,7 +398,7 @@ Deliver the backend foundation for videos — object storage for videos and thum
 ### SI-03.13 — Endpoint GET /videos/{slug}/stream (streaming via redirect)
 
 **Route:** GET /videos/{slug}/stream
-**Test Specs:** _pending /plan-test-specs_
+**Test Specs:** see `nestjs-project/specs/videos-stream.plan.md`
 **Authorization:** Owner (per `### Authorization Matrix`)
 
 **Description:** Endpoint estável de reprodução pela URL única do vídeo: a API autoriza e redireciona para uma URL pré-assinada, e o storage atende `Range`/`206` nativamente, sem bytes passando pela API.
@@ -433,7 +433,7 @@ Deliver the backend foundation for videos — object storage for videos and thum
 ### SI-03.14 — Endpoint GET /videos/{slug}/download (download via redirect)
 
 **Route:** GET /videos/{slug}/download
-**Test Specs:** _pending /plan-test-specs_
+**Test Specs:** see `nestjs-project/specs/videos-download.plan.md`
 **Authorization:** Owner (per `### Authorization Matrix`)
 
 **Description:** Mesmo mecanismo do streaming, com `Content-Disposition: attachment` na URL pré-assinada, para que o navegador baixe o arquivo com o nome original.
