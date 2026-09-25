@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Get,
   HttpCode,
   HttpStatus,
   Param,
@@ -21,6 +22,7 @@ import { CreateVideoUploadDto } from './dto/create-video-upload.dto';
 import { CreateVideoUploadResponseDto } from './dto/create-video-upload-response.dto';
 import { PresignPartsDto } from './dto/presign-parts.dto';
 import { PresignPartsResponseDto } from './dto/presign-parts-response.dto';
+import { UploadedPartsResponseDto } from './dto/uploaded-parts-response.dto';
 import { VideosService } from './videos.service';
 
 @ApiTags('videos')
@@ -117,5 +119,59 @@ export class VideosController {
     @Body() dto: PresignPartsDto,
   ): Promise<PresignPartsResponseDto> {
     return this.videosService.presignParts(id, user.sub, dto.partNumbers);
+  }
+
+  @Get(':id/upload/parts')
+  @ApiBearerAuth('access-token')
+  @ApiOperation({
+    summary: 'List uploaded parts',
+    description:
+      'Lists the parts already received by storage for an owned, awaiting-upload video, so an interrupted upload can be resumed.',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Uploaded parts',
+    schema: {
+      properties: {
+        parts: {
+          type: 'array',
+          items: {
+            properties: {
+              partNumber: { type: 'integer' },
+              etag: { type: 'string' },
+              size: { type: 'integer' },
+            },
+          },
+        },
+        partSize: { type: 'integer' },
+        partCount: { type: 'integer' },
+      },
+    },
+  })
+  @ApiResponse({
+    status: 400,
+    description: 'VALIDATION_ERROR',
+    schema: { $ref: getSchemaPath(ApiErrorEnvelope) },
+  })
+  @ApiResponse({
+    status: 401,
+    description: 'Missing or invalid access token',
+    schema: { $ref: getSchemaPath(ApiErrorEnvelope) },
+  })
+  @ApiResponse({
+    status: 404,
+    description: 'VIDEO_NOT_FOUND',
+    schema: { $ref: getSchemaPath(ApiErrorEnvelope) },
+  })
+  @ApiResponse({
+    status: 409,
+    description: 'INVALID_VIDEO_STATE',
+    schema: { $ref: getSchemaPath(ApiErrorEnvelope) },
+  })
+  async listUploadedParts(
+    @CurrentUser() user: JwtPayload,
+    @Param('id', ParseUUIDPipe) id: string,
+  ): Promise<UploadedPartsResponseDto> {
+    return this.videosService.listUploadedParts(id, user.sub);
   }
 }

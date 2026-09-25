@@ -18,6 +18,7 @@ import { Video, VideoProcessingStatus } from './entities/video.entity';
 import { CreateVideoUploadDto } from './dto/create-video-upload.dto';
 import { CreateVideoUploadResponseDto } from './dto/create-video-upload-response.dto';
 import { PresignPartsResponseDto } from './dto/presign-parts-response.dto';
+import { UploadedPartsResponseDto } from './dto/uploaded-parts-response.dto';
 import { generateVideoSlug } from './video-slug';
 
 const SLUG_COLUMN = 'slug';
@@ -168,5 +169,32 @@ export class VideosService {
     );
 
     return { parts, expiresIn };
+  }
+
+  async listUploadedParts(
+    videoId: string,
+    userId: string,
+  ): Promise<UploadedPartsResponseDto> {
+    const video = await this.findOwnedById(videoId, userId);
+    this.assertAwaitingUpload(video);
+
+    const uploadedParts = await this.storageService.listParts(
+      videoObjectKey(video.id),
+      video.upload_id,
+    );
+
+    const parts = uploadedParts
+      .map((part) => ({
+        partNumber: part.PartNumber!,
+        etag: part.ETag!,
+        size: part.Size!,
+      }))
+      .sort((a, b) => a.partNumber - b.partNumber);
+
+    return {
+      parts,
+      partSize: video.upload_part_size_bytes,
+      partCount: video.upload_part_count,
+    };
   }
 }

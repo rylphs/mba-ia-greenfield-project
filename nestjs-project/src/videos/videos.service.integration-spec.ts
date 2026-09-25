@@ -203,3 +203,93 @@ describe('VideosService.presignParts (integration)', () => {
     );
   }, 30000);
 });
+
+describe('VideosService.listUploadedParts (integration)', () => {
+  let dataSource: DataSource;
+  let userRepository: Repository<User>;
+  let videoRepository: Repository<Video>;
+  let channelsService: ChannelsService;
+  let storageService: StorageService;
+  let videosService: VideosService;
+
+  beforeAll(async () => {
+    dataSource = createTestDataSource(ALL_ENTITIES);
+    await dataSource.initialize();
+    userRepository = dataSource.getRepository(User);
+    videoRepository = dataSource.getRepository(Video);
+    channelsService = new ChannelsService(dataSource);
+
+    storageService = new StorageService(
+      buildS3Client(storageCfg.endpoint),
+      buildS3Client(storageCfg.publicEndpoint),
+      storageCfg as any,
+    );
+
+    videosService = new VideosService(
+      videoRepository,
+      channelsService,
+      storageService,
+      uploadCfg as any,
+    );
+  });
+
+  afterAll(async () => {
+    await dataSource.destroy();
+  });
+
+  beforeEach(async () => {
+    await cleanAllTables(dataSource);
+  });
+
+  let userCounter = 0;
+  async function createUserWithChannel(): Promise<{ userId: string }> {
+    const email = `videos_listparts_${++userCounter}@example.com`;
+    const user = await userRepository.save(
+      userRepository.create({ email, password: 'hashed' }),
+    );
+    await channelsService.createChannel(user.id, email);
+    return { userId: user.id };
+  }
+
+  it('lists empty before any PUT, then only the uploaded parts after PUTs', async () => {
+    const { userId } = await createUserWithChannel();
+    const upload = await videosService.createUpload(userId, {
+      fileName: 'ferias.mp4',
+      fileSize: 200 * 1024 * 1024,
+      contentType: 'video/mp4',
+    });
+
+    const before = await videosService.listUploadedParts(
+      upload.videoId,
+      userId,
+    );
+    expect(before.parts).toEqual([]);
+    expect(before.partSize).toBe(upload.partSize);
+    expect(before.partCount).toBe(upload.partCount);
+
+    const presigned = await videosService.presignParts(
+      upload.videoId,
+      userId,
+      [1, 3],
+    );
+    const putResults = await Promise.all(
+      presigned.parts.map(({ url }) =>
+        requestViaInternalNetwork(url, {
+          method: 'PUT',
+          body: Buffer.from('hello world'),
+        }),
+      ),
+    );
+    for (const res of putResults) {
+      expect(res.status).toBe(200);
+    }
+
+    const after = await videosService.listUploadedParts(upload.videoId, userId);
+    expect(after.parts).toHaveLength(2);
+    expect(after.parts.map((p) => p.partNumber)).toEqual([1, 3]);
+    for (const part of after.parts) {
+      expect(part.etag).toBeTruthy();
+      expect(part.size).toBe(Buffer.from('hello world').length);
+    }
+  }, 30000);
+});

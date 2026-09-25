@@ -1,7 +1,7 @@
 # phase-03-videos — Progress
 
 **Status:** in_progress
-**SIs:** 6/15 completed
+**SIs:** 7/15 completed
 
 ### SI-03.1 — Infra: dependências, Redis e MinIO no Compose
 - **Status:** completed
@@ -60,9 +60,12 @@
   - `/simplify`: `findOwnedById` trocou duas queries sequenciais (`ChannelsService.findByUserId` + `videoRepo.findOne`) por um único `createQueryBuilder('video').innerJoin('video.channel', 'channel', 'channel.user_id = :userId', ...)` — 1 round-trip a menos por chamada, usando a relação `video.channel` já existente (SI-03.4) em vez de nomes de tabela crus; dono errado e canal inexistente continuam colapsando no mesmo `VIDEO_NOT_FOUND`. `assertAwaitingUpload` virou uma assertion function TS (`asserts video is Video & { upload_id: string }`) que também absorve o check de `upload_id` nulo (antes um segundo `if` solto em `presignParts`) — mesma invariante estrutural documentada (nunca deveria disparar, já que `createUpload` sempre grava `upload_id` antes de deixar o vídeo em `awaiting_upload`), agora com o tipo narrado no compilador em vez de um cast manual downstream. `@HttpCode(200)` virou `@HttpCode(HttpStatus.OK)` para bater com o resto do controller layer (`auth.controller.ts`). Reescrevi o describe `presignParts` de `videos.service.spec.ts` para mockar `videoRepo.createQueryBuilder()` (chain `innerJoin`/`where`/`getOne`) em vez de `channelsService.findByUserId` + `videoRepo.findOne` separados — os dois testes de "sem canal"/"dono errado" colapsaram em um só ("nenhum vídeo owned encontrado"), por isso o total caiu de 19 para 18. Não apliquei a sugestão de Altitude de rotear a invariante de `upload_id` nulo por uma `DomainException` (via `DomainExceptionFilter`) em vez de `Error` genérico — contradiz o precedente já deliberado na SI-03.5 para invariantes fora do Error Catalog (um bug real nesse ponto deve mesmo virar 500 não-tratado, não um envelope de erro de domínio). Não extraí as `const key`/`uploadId`/`expiresIn` de `presignParts` (sugestão de Simplification) além do necessário: `uploadId` precisa continuar como `const` local para a closure do `.map()` enxergar o tipo já estreitado pela assertion function — TS não propaga narrowing de member access para dentro de closures.
 
 ### SI-03.7 — Endpoint GET /videos/{id}/upload/parts (retomada do upload)
-- **Status:** pending
-- **Tests:** —
-- **Observations:** none
+- **Status:** completed
+- **Tests:** 8 passing
+- **Observations:**
+  - `listUploadedParts` reusa `findOwnedById`/`assertAwaitingUpload` (SI-03.6) sem duplicar as regras de posse/estado; delega a listagem real ao `StorageService.listParts` (já existente desde SI-03.3) e só ordena/mapeia o resultado por `partNumber`.
+  - Fixture do e2e (`test/videos-upload-parts-list.e2e-spec.ts`) precisou de `fileSize = 200MiB` no cenário "lista-apenas-as-parts-enviadas" para garantir `partCount ≥ 3` (o default de 100MiB do helper `createVideo` só gera 2 parts com o `partSizeBytes` atual) — sem isso o presign da part 3 falhava com `400 INVALID_PART_NUMBER` antes mesmo de chegar no GET sob teste.
+  - `/simplify`: paralelizei os dois loops de `PUT` sequenciais (um em `videos.service.integration-spec.ts`, outro no e2e) com `Promise.all`, já que cada `PUT` é I/O independente contra keys/URLs diferentes no MinIO — reduz o tempo de wall-clock do teste sem mudar as asserções. Não apliquei a sugestão de Altitude de mover as non-null assertions (`part.PartNumber!`/`ETag!`/`Size!`) do `Video.Service.listUploadedParts` para dentro de `StorageService.listParts` (normalizando o retorno do SDK lá): isso mudaria a assinatura de um método pré-existente (SI-03.3) que já tem outro consumidor fora do escopo desta SI (`storage.service.integration-spec.ts`), contradizendo a diretriz de não tocar código fora do diff revisado. As demais sugestões (Reuse e Simplification) não encontraram nada acionável — código já reusa `findOwnedById`/`assertAwaitingUpload`/`StorageService.listParts` como esperado.
 
 ### SI-03.8 — Infra: fila `video-processing` (BullModule)
 - **Status:** pending
