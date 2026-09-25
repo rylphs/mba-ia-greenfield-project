@@ -1,7 +1,7 @@
 # phase-03-videos — Progress
 
 **Status:** in_progress
-**SIs:** 7/15 completed
+**SIs:** 8/15 completed
 
 ### SI-03.1 — Infra: dependências, Redis e MinIO no Compose
 - **Status:** completed
@@ -68,9 +68,10 @@
   - `/simplify`: paralelizei os dois loops de `PUT` sequenciais (um em `videos.service.integration-spec.ts`, outro no e2e) com `Promise.all`, já que cada `PUT` é I/O independente contra keys/URLs diferentes no MinIO — reduz o tempo de wall-clock do teste sem mudar as asserções. Não apliquei a sugestão de Altitude de mover as non-null assertions (`part.PartNumber!`/`ETag!`/`Size!`) do `Video.Service.listUploadedParts` para dentro de `StorageService.listParts` (normalizando o retorno do SDK lá): isso mudaria a assinatura de um método pré-existente (SI-03.3) que já tem outro consumidor fora do escopo desta SI (`storage.service.integration-spec.ts`), contradizendo a diretriz de não tocar código fora do diff revisado. As demais sugestões (Reuse e Simplification) não encontraram nada acionável — código já reusa `findOwnedById`/`assertAwaitingUpload`/`StorageService.listParts` como esperado.
 
 ### SI-03.8 — Infra: fila `video-processing` (BullModule)
-- **Status:** pending
-- **Tests:** —
-- **Observations:** none
+- **Status:** completed
+- **Tests:** 1 passing
+- **Observations:**
+  - `ioredis` não estava no `package.json` apesar de ser peer dependency obrigatória do backend Redis padrão do `bullmq` 6.x (`bullmq-otel`/`redis` também são peers opcionais, mas `ioredis` é quem o `BullModule.forRootAsync` usa por trás dos panos ao passar `connection: { host, port }`). Sem ele, `QueueModule.spec.ts` falhava na compilação do módulo com `BullMQ could not load the optional 'ioredis' package`. Instalado via `docker compose exec nestjs-api npm install ioredis@^5.4.1` (resolveu para `^5.11.1`); não estava listado nas Technical actions da SI-03.1 nem da SI-03.8, mas é uma dependência estrutural do próprio `@nestjs/bullmq`/`bullmq` já instalados, não uma decisão de escopo.
 
 ### SI-03.9 — Endpoint POST /videos/{id}/upload/complete (conclusão + disparo do processamento)
 - **Status:** pending
