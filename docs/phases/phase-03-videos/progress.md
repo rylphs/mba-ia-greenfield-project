@@ -1,7 +1,7 @@
 # phase-03-videos — Progress
 
 **Status:** in_progress
-**SIs:** 1/15 completed
+**SIs:** 2/15 completed
 
 ### SI-03.1 — Infra: dependências, Redis e MinIO no Compose
 - **Status:** completed
@@ -13,9 +13,13 @@
   - Usei `redis:7.4-alpine`, já que o plano não fixa versão do Redis. Sem chave de env para a origem CORS, porque a lista de chaves do plano não inclui uma.
 
 ### SI-03.2 — Infra: namespaces de configuração de fila, storage, upload e processamento
-- **Status:** pending
-- **Tests:** —
-- **Observations:** none
+- **Status:** completed
+- **Tests:** 12 passing
+- **Observations:**
+  - `FFMPEG_TIMEOUT_MS`: `Joi.number().positive().default(30000)`, igual aos irmãos `attempts`/`backoffDelayMs` do mesmo config — é um tuning knob operacional, não um segredo por ambiente, então tratá-lo como `.required()` (decisão inicial revertida no `/simplify`) só empurrava o default de volta para os arquivos `.env`/`.env.example`.
+  - Backfillei `env.validation.ts` com validadores Joi para as chaves `REDIS_*`/`S3_*` que a SI-03.1 já tinha adicionado a `.env.example`/`.env` mas que ainda dependiam só de `allowUnknown: true` (nenhuma SI anterior as validava).
+  - Atualizei `.env` (não só `.env.example`) com as novas chaves de upload/processamento — necessário para a aplicação inicializar.
+  - `/simplify`: troquei o parser manual de `.env.example` no teste por `dotenv.parse` (já usado internamente por `@nestjs/config` e pelo `setupFiles` do Jest) e promovi `dotenv` de dependência transitiva para `devDependency` explícita em `package.json`.
 
 ### SI-03.3 — StorageModule com clientes S3 interno e público
 - **Status:** pending
