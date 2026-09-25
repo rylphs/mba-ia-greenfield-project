@@ -1,7 +1,7 @@
 # phase-03-videos — Progress
 
 **Status:** in_progress
-**SIs:** 3/15 completed
+**SIs:** 4/15 completed
 
 ### SI-03.1 — Infra: dependências, Redis e MinIO no Compose
 - **Status:** completed
@@ -30,9 +30,15 @@
   - `/simplify`: extraí `buildS3Client(endpoint, cfg)` em `storage.module.ts` (as duas factories dos clientes S3 eram cópia quase idêntica); movi o helper de request cru (`requestViaInternalNetwork`) do spec de integração para `src/test/minio.ts`, espelhando o precedente `src/test/mailpit.ts` — SIs futuras de upload/E2E devem reusar esse helper em vez de duplicá-lo; extraí `uploadTestObject()` para o setup repetido (create→presign→PUT→complete) nos testes que não precisam inspecionar `listParts`/host da URL; paralelizei as duas leituras independentes (Content-Disposition e Range) do mesmo `downloadUrl` com `Promise.all`.
 
 ### SI-03.4 — Entidade Video e migration
-- **Status:** pending
-- **Tests:** —
-- **Observations:** none
+- **Status:** completed
+- **Tests:** 6 passing
+- **Observations:**
+  - Sem precedente de `transformer` numérico no projeto para colunas `bigint` (grep confirmou). Escrevi um transformer local em `video.entity.ts` (`to`/`from` com `Number()`) em vez de extrair para um arquivo compartilhado — só `Video` precisa disso hoje.
+  - `migration:generate` prefixa o próprio timestamp ao nome passado; passar um caminho já com timestamp gera nome/classe duplo-prefixados. Renomeei o arquivo e a classe para o padrão de timestamp único das migrations existentes (`CreateVideos1790357447592`).
+  - Corrigi um gap de idempotência pré-existente em `migrations.integration-spec.ts`: `DROP TABLE ... CASCADE` no `beforeAll` não remove os enum types das colunas — um `verification_tokens_type_enum` de uma execução anterior colidia com o `CREATE TYPE` da migration `CreateAuthTokens` na re-execução. Adicionei `DROP TYPE IF EXISTS` explícito (`MANAGED_ENUM_TYPES`) para os três enums geridos (o pré-existente + os dois novos de `Video`). Também ajustei o teste de revert: com `CreateVideos` agora sendo a última migration, `undoLastMigration()` remove a tabela `videos`, não mais as tabelas de token.
+  - Atualizei os 7 integration-specs existentes que já montavam `ALL_ENTITIES` com `Channel` para incluir `Video` — necessário porque `Channel` ganhou `@OneToMany(() => Video, ...)` e o TypeORM exige a entidade relacionada registrada no mesmo `DataSource`.
+  - `/simplify`: renomeei `requiredFields()` para `buildVideo(channelId, overrides)`, espelhando o padrão `buildToken(id, overrides)` já usado em `refresh-token`/`verification-token` specs; juntei os dois testes com arrange idêntico (defaults + campos nulos) em um só; removi um `counter` sem uso real em `createChannel()` (cada teste chama no máximo uma vez, e `beforeEach` já limpa as tabelas). A revisão de Altitude achou um bug real introduzido por esta SI: `Channel` ganhou `@OneToMany(() => Video, ...)`, o que quebra silenciosamente 3 `*.module.spec.ts` (`channels`, `auth`, `users`) que montam `DataSource`/`TypeOrmModule` com `Channel` mas sem `Video` — nenhum estava na minha varredura inicial (só busquei por `*.entity.integration-spec.ts`/`*.service.integration-spec.ts`). Corrigi os 3. Tentei paralelizar os `DROP TABLE`/`DROP TYPE` do `beforeAll` de `migrations.integration-spec.ts` e os `DELETE` de `cleanAllTables` via `Promise.all` (sugestão de Efficiency) — causou deadlock real do Postgres (`DataSource.query` concorrente não é seguro aqui); revertido para sequencial após reproduzir a falha e confirmar a correção com 3 execuções seguidas sem deadlock. Não apliquei a sugestão de Altitude de extrair um `ALL_ENTITIES` compartilhado em `create-test-data-source.ts` (tocaria ~12 arquivos, incluindo vários fora desta SI) nem a limpeza de enums via `pg_type` — mudanças de escopo maior que ficam para uma tarefa dedicada.
+  - Lint: 194 problemas pré-existentes no repo (confirmados por 3 subagents em rodadas diferentes), nenhum nos arquivos novos (`video.entity.ts`, `video.entity.integration-spec.ts`, migration, `channel.entity.ts`). Dois hits caem em arquivos tocados por esta SI mas em linhas não tocadas (`create-test-data-source.ts:9` — `Function` type pré-existente; `users.service.integration-spec.ts:12` — import não usado pré-existente).
 
 ### SI-03.5 — Endpoint POST /videos (pré-cadastro do rascunho + início do multipart)
 - **Status:** pending
