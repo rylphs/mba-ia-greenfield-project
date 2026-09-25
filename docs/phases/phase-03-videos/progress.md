@@ -1,7 +1,7 @@
 # phase-03-videos — Progress
 
 **Status:** in_progress
-**SIs:** 2/15 completed
+**SIs:** 3/15 completed
 
 ### SI-03.1 — Infra: dependências, Redis e MinIO no Compose
 - **Status:** completed
@@ -22,9 +22,12 @@
   - `/simplify`: troquei o parser manual de `.env.example` no teste por `dotenv.parse` (já usado internamente por `@nestjs/config` e pelo `setupFiles` do Jest) e promovi `dotenv` de dependência transitiva para `devDependency` explícita em `package.json`.
 
 ### SI-03.3 — StorageModule com clientes S3 interno e público
-- **Status:** pending
-- **Tests:** —
-- **Observations:** none
+- **Status:** completed
+- **Tests:** 7 passing
+- **Observations:**
+  - `S3_PUBLIC_ENDPOINT` (`localhost:9000`) não é alcançável de dentro do container `nestjs-api` (só a porta 3000 é publicada nesse namespace) — é host-facing por design, para o browser/`next-frontend`. O teste de integração contorna isso conectando via TCP ao host interno (`minio:9000`, sempre alcançável) mas preservando o header `Host` original da URL presignada; SigV4 valida o header `host` assinado, não o peer TCP, e a política anônima do MinIO não depende de host — então a assinatura/policy real é exercitada sem mudar o que está sendo testado.
+  - Tokens dos providers (`S3_INTERNAL_CLIENT`/`S3_PUBLIC_CLIENT`) são strings simples, não `Symbol` — não há precedente de token `Symbol`-based no projeto (`mail.constants.ts`/`auth.constants.ts` só têm valores literais).
+  - `/simplify`: extraí `buildS3Client(endpoint, cfg)` em `storage.module.ts` (as duas factories dos clientes S3 eram cópia quase idêntica); movi o helper de request cru (`requestViaInternalNetwork`) do spec de integração para `src/test/minio.ts`, espelhando o precedente `src/test/mailpit.ts` — SIs futuras de upload/E2E devem reusar esse helper em vez de duplicá-lo; extraí `uploadTestObject()` para o setup repetido (create→presign→PUT→complete) nos testes que não precisam inspecionar `listParts`/host da URL; paralelizei as duas leituras independentes (Content-Disposition e Range) do mesmo `downloadUrl` com `Promise.all`.
 
 ### SI-03.4 — Entidade Video e migration
 - **Status:** pending
