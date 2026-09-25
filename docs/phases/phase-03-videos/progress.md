@@ -1,7 +1,7 @@
 # phase-03-videos — Progress
 
 **Status:** in_progress
-**SIs:** 4/15 completed
+**SIs:** 5/15 completed
 
 ### SI-03.1 — Infra: dependências, Redis e MinIO no Compose
 - **Status:** completed
@@ -41,9 +41,15 @@
   - Lint: 194 problemas pré-existentes no repo (confirmados por 3 subagents em rodadas diferentes), nenhum nos arquivos novos (`video.entity.ts`, `video.entity.integration-spec.ts`, migration, `channel.entity.ts`). Dois hits caem em arquivos tocados por esta SI mas em linhas não tocadas (`create-test-data-source.ts:9` — `Function` type pré-existente; `users.service.integration-spec.ts:12` — import não usado pré-existente).
 
 ### SI-03.5 — Endpoint POST /videos (pré-cadastro do rascunho + início do multipart)
-- **Status:** pending
-- **Tests:** —
-- **Observations:** none
+- **Status:** completed
+- **Tests:** 23 passing
+- **Observations:**
+  - `ChannelsService.findByUserId` usa `dataSource.getRepository(Channel).findOne(...)` em vez de injetar `Repository<Channel>` no construtor — mantém o padrão existente do serviço (só `DataSource` é injetado; `createChannel` já usa `dataSource.transaction`).
+  - `VideosService.createUpload` injeta `Repository<Video>` mas roda a criação do rascunho + `StorageService.createMultipartUpload` + gravação do `upload_id` dentro de uma única `videoRepo.manager.transaction(...)`, com `SAVEPOINT`/`ROLLBACK TO SAVEPOINT` por tentativa de slug (per `.claude/rules/typeorm-queries.md` — sem savepoint, uma violação de unique aborta a transação Postgres inteira e impede o retry). Isso garante o rollback do insert quando o storage falha (AC coberto por `videos.service.integration-spec.ts`) e ainda permite mock de `manager` em unit test (`videos.service.spec.ts`) via `videoRepo.manager.transaction = jest.fn((cb) => cb(mockManager))`, per `.claude/rules/nestjs-testing.md`.
+  - `MAX_SLUG_ATTEMPTS = 3` interpretado como 3 tentativas totais (não 3 retries após a primeira) — a redação do plano ("regenerando o slug em violação unique até 3 tentativas") é ambígua nesse ponto; optei pela leitura mais literal.
+  - Nenhum código de erro de domínio existe para "usuário autenticado sem canal" (não está no Error Catalog da fase — todo usuário registrado ganha canal via `UsersService.createUserWithChannel`, então é tratado como invariante e propaga um `Error` genérico em vez de uma `DomainException`, seguindo a regra de nunca engolir erros).
+  - Endpoint usa schema inline (`schema: { properties: {...} }`) no `@ApiResponse` 201 em vez de `type: CreateVideoUploadResponseDto`, para bater com o padrão observado em todo o `auth.controller.ts` (nenhum endpoint existente usa `type:`/`@ApiBody` — Swagger infere o body do parâmetro `@Body() dto`).
+  - `/simplify`: extraí `isPgUniqueViolationOnColumn`/`PG_UNIQUE_VIOLATION` (copiado verbatim de `channels.service.ts`) para `src/common/typeorm/pg-errors.ts`, reusado por `ChannelsService` e `VideosService`; troquei o `manager.save(video)` final (só para gravar `upload_id`) por `manager.update(Video, video.id, { upload_id })` — evita round-trip do entity inteiro por uma única coluna; simplifiquei o savepoint de nome único por tentativa (`slug_attempt_${attempt}`) para um nome fixo reusado (`SLUG_SAVEPOINT`), já que as tentativas são sequenciais, não aninhadas. A extração do helper `pg-errors.ts` moveu 6 erros de lint pré-existentes (`no-unsafe-*` sobre `err as any`) do arquivo antigo para o novo; corrigi tipando via uma interface `PgQueryFailedError extends QueryFailedError` local em vez de `any`. Não apliquei a sugestão de unificar os dois mecanismos de retry (savepoint-por-tentativa em `VideosService` vs. nova transação por tentativa em `ChannelsService`) nem a de trocar o `Error` genérico de "usuário sem canal" por uma nova categoria de `DomainException` — ambas tocariam código já testado fora do escopo desta SI. Ajustei `videos.service.spec.ts` (mock `manager` sem `update` quebrava 3 testes após a troca save→update) e a asserção de contagem de `manager.save` (2 em vez de 3, já que o save final virou update).
 
 ### SI-03.6 — Endpoint POST /videos/{id}/upload/parts (URLs pré-assinadas de parts)
 - **Status:** pending
