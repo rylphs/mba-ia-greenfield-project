@@ -3,7 +3,10 @@ import { InjectRepository } from '@nestjs/typeorm';
 import type { ConfigType } from '@nestjs/config';
 import { Repository } from 'typeorm';
 import {
+  InvalidPartNumberException,
+  InvalidVideoStateException,
   UnsupportedVideoTypeException,
+  VideoNotFoundException,
   VideoTooLargeException,
 } from '../common/exceptions/domain.exception';
 import { isPgUniqueViolationOnColumn } from '../common/typeorm/pg-errors';
@@ -11,9 +14,10 @@ import { ChannelsService } from '../channels/channels.service';
 import { StorageService } from '../storage/storage.service';
 import { videoObjectKey } from '../storage/storage-keys';
 import uploadConfig from '../config/upload.config';
-import { Video } from './entities/video.entity';
+import { Video, VideoProcessingStatus } from './entities/video.entity';
 import { CreateVideoUploadDto } from './dto/create-video-upload.dto';
 import { CreateVideoUploadResponseDto } from './dto/create-video-upload-response.dto';
+import { PresignPartsResponseDto } from './dto/presign-parts-response.dto';
 import { generateVideoSlug } from './video-slug';
 
 const SLUG_COLUMN = 'slug';
@@ -105,5 +109,64 @@ export class VideosService {
         partCount,
       };
     });
+  }
+
+  async findOwnedById(videoId: string, userId: string): Promise<Video> {
+    const video = await this.videoRepo
+      .createQueryBuilder('video')
+      .innerJoin('video.channel', 'channel', 'channel.user_id = :userId', {
+        userId,
+      })
+      .where('video.id = :videoId', { videoId })
+      .getOne();
+
+    if (!video) {
+      throw new VideoNotFoundException();
+    }
+    return video;
+  }
+
+  assertAwaitingUpload(
+    video: Video,
+  ): asserts video is Video & { upload_id: string } {
+    if (video.processing_status !== VideoProcessingStatus.AWAITING_UPLOAD) {
+      throw new InvalidVideoStateException();
+    }
+    if (!video.upload_id) {
+      throw new Error(
+        `Video ${video.id} is awaiting_upload but has no upload_id`,
+      );
+    }
+  }
+
+  async presignParts(
+    videoId: string,
+    userId: string,
+    partNumbers: number[],
+  ): Promise<PresignPartsResponseDto> {
+    const video = await this.findOwnedById(videoId, userId);
+    this.assertAwaitingUpload(video);
+
+    if (partNumbers.some((n) => n > video.upload_part_count)) {
+      throw new InvalidPartNumberException();
+    }
+
+    const { upload_id: uploadId, id } = video;
+    const expiresIn = this.uploadCfg.uploadUrlExpiresSeconds;
+    const key = videoObjectKey(id);
+
+    const parts = await Promise.all(
+      partNumbers.map(async (partNumber) => ({
+        partNumber,
+        url: await this.storageService.presignUploadPart(
+          key,
+          uploadId,
+          partNumber,
+          expiresIn,
+        ),
+      })),
+    );
+
+    return { parts, expiresIn };
   }
 }

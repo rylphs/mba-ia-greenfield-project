@@ -1,7 +1,7 @@
 # phase-03-videos — Progress
 
 **Status:** in_progress
-**SIs:** 5/15 completed
+**SIs:** 6/15 completed
 
 ### SI-03.1 — Infra: dependências, Redis e MinIO no Compose
 - **Status:** completed
@@ -52,9 +52,12 @@
   - `/simplify`: extraí `isPgUniqueViolationOnColumn`/`PG_UNIQUE_VIOLATION` (copiado verbatim de `channels.service.ts`) para `src/common/typeorm/pg-errors.ts`, reusado por `ChannelsService` e `VideosService`; troquei o `manager.save(video)` final (só para gravar `upload_id`) por `manager.update(Video, video.id, { upload_id })` — evita round-trip do entity inteiro por uma única coluna; simplifiquei o savepoint de nome único por tentativa (`slug_attempt_${attempt}`) para um nome fixo reusado (`SLUG_SAVEPOINT`), já que as tentativas são sequenciais, não aninhadas. A extração do helper `pg-errors.ts` moveu 6 erros de lint pré-existentes (`no-unsafe-*` sobre `err as any`) do arquivo antigo para o novo; corrigi tipando via uma interface `PgQueryFailedError extends QueryFailedError` local em vez de `any`. Não apliquei a sugestão de unificar os dois mecanismos de retry (savepoint-por-tentativa em `VideosService` vs. nova transação por tentativa em `ChannelsService`) nem a de trocar o `Error` genérico de "usuário sem canal" por uma nova categoria de `DomainException` — ambas tocariam código já testado fora do escopo desta SI. Ajustei `videos.service.spec.ts` (mock `manager` sem `update` quebrava 3 testes após a troca save→update) e a asserção de contagem de `manager.save` (2 em vez de 3, já que o save final virou update).
 
 ### SI-03.6 — Endpoint POST /videos/{id}/upload/parts (URLs pré-assinadas de parts)
-- **Status:** pending
-- **Tests:** —
-- **Observations:** none
+- **Status:** completed
+- **Tests:** 18 passing
+- **Observations:**
+  - `presignParts` roda as N chamadas a `StorageService.presignUploadPart` em paralelo via `Promise.all(partNumbers.map(...))` — a ordem do array de resultado é a ordem de `partNumbers` independente da ordem de resolução das promises, então o AC "ordem pedida" é preservado sem precisar de índice manual.
+  - E2E reusa o helper `requestViaInternalNetwork` (criado no `/simplify` da SI-03.3) para o `PUT` real contra o MinIO, já que a URL pré-assinada aponta para `S3_PUBLIC_ENDPOINT` (`localhost:9000`), inalcançável de dentro do container de teste.
+  - `/simplify`: `findOwnedById` trocou duas queries sequenciais (`ChannelsService.findByUserId` + `videoRepo.findOne`) por um único `createQueryBuilder('video').innerJoin('video.channel', 'channel', 'channel.user_id = :userId', ...)` — 1 round-trip a menos por chamada, usando a relação `video.channel` já existente (SI-03.4) em vez de nomes de tabela crus; dono errado e canal inexistente continuam colapsando no mesmo `VIDEO_NOT_FOUND`. `assertAwaitingUpload` virou uma assertion function TS (`asserts video is Video & { upload_id: string }`) que também absorve o check de `upload_id` nulo (antes um segundo `if` solto em `presignParts`) — mesma invariante estrutural documentada (nunca deveria disparar, já que `createUpload` sempre grava `upload_id` antes de deixar o vídeo em `awaiting_upload`), agora com o tipo narrado no compilador em vez de um cast manual downstream. `@HttpCode(200)` virou `@HttpCode(HttpStatus.OK)` para bater com o resto do controller layer (`auth.controller.ts`). Reescrevi o describe `presignParts` de `videos.service.spec.ts` para mockar `videoRepo.createQueryBuilder()` (chain `innerJoin`/`where`/`getOne`) em vez de `channelsService.findByUserId` + `videoRepo.findOne` separados — os dois testes de "sem canal"/"dono errado" colapsaram em um só ("nenhum vídeo owned encontrado"), por isso o total caiu de 19 para 18. Não apliquei a sugestão de Altitude de rotear a invariante de `upload_id` nulo por uma `DomainException` (via `DomainExceptionFilter`) em vez de `Error` genérico — contradiz o precedente já deliberado na SI-03.5 para invariantes fora do Error Catalog (um bug real nesse ponto deve mesmo virar 500 não-tratado, não um envelope de erro de domínio). Não extraí as `const key`/`uploadId`/`expiresIn` de `presignParts` (sugestão de Simplification) além do necessário: `uploadId` precisa continuar como `const` local para a closure do `.map()` enxergar o tipo já estreitado pela assertion function — TS não propaga narrowing de member access para dentro de closures.
 
 ### SI-03.7 — Endpoint GET /videos/{id}/upload/parts (retomada do upload)
 - **Status:** pending

@@ -1,6 +1,7 @@
 import { QueryFailedError } from 'typeorm';
 import { ChannelsService } from '../channels/channels.service';
 import { StorageService } from '../storage/storage.service';
+import { VideoProcessingStatus } from './entities/video.entity';
 import { VideosService } from './videos.service';
 
 function uniqueViolationError(column: string): QueryFailedError {
@@ -130,5 +131,106 @@ describe('VideosService.createUpload', () => {
 
     expect(manager.save).toHaveBeenCalledTimes(3);
     expect(storageService.createMultipartUpload).not.toHaveBeenCalled();
+  });
+});
+
+describe('VideosService.presignParts', () => {
+  const uploadCfg = {
+    maxVideoSizeBytes: 10737418240,
+    partSizeBytes: 67108864,
+    uploadUrlExpiresSeconds: 3600,
+  };
+  const baseVideo = {
+    id: 'video-1',
+    channel_id: 'channel-1',
+    upload_id: 'upload-id-1',
+    upload_part_count: 3,
+    processing_status: VideoProcessingStatus.AWAITING_UPLOAD,
+  };
+
+  let storageService: { presignUploadPart: jest.Mock };
+  let queryBuilder: {
+    innerJoin: jest.Mock;
+    where: jest.Mock;
+    getOne: jest.Mock;
+  };
+  let videoRepo: { manager: object; createQueryBuilder: jest.Mock };
+  let service: VideosService;
+
+  beforeEach(() => {
+    storageService = {
+      presignUploadPart: jest
+        .fn()
+        .mockImplementation((_key: string, _uploadId: string, n: number) =>
+          Promise.resolve(`https://presigned.example/${n}`),
+        ),
+    };
+    queryBuilder = {
+      innerJoin: jest.fn().mockReturnThis(),
+      where: jest.fn().mockReturnThis(),
+      getOne: jest.fn().mockResolvedValue({ ...baseVideo }),
+    };
+    videoRepo = {
+      manager: {},
+      createQueryBuilder: jest.fn().mockReturnValue(queryBuilder),
+    };
+
+    service = new VideosService(
+      videoRepo as any,
+      {} as unknown as ChannelsService,
+      storageService as unknown as StorageService,
+      uploadCfg as any,
+    );
+  });
+
+  it('throws VIDEO_NOT_FOUND when no owned video matches', async () => {
+    queryBuilder.getOne.mockResolvedValue(null);
+
+    await expect(
+      service.presignParts('video-1', 'user-1', [1]),
+    ).rejects.toMatchObject({ errorCode: 'VIDEO_NOT_FOUND' });
+
+    expect(queryBuilder.innerJoin).toHaveBeenCalledWith(
+      'video.channel',
+      'channel',
+      'channel.user_id = :userId',
+      { userId: 'user-1' },
+    );
+    expect(queryBuilder.where).toHaveBeenCalledWith('video.id = :videoId', {
+      videoId: 'video-1',
+    });
+  });
+
+  it('throws INVALID_VIDEO_STATE when the video is not awaiting upload', async () => {
+    queryBuilder.getOne.mockResolvedValue({
+      ...baseVideo,
+      processing_status: VideoProcessingStatus.PROCESSING,
+    });
+
+    await expect(
+      service.presignParts('video-1', 'user-1', [1]),
+    ).rejects.toMatchObject({ errorCode: 'INVALID_VIDEO_STATE' });
+  });
+
+  it('throws INVALID_PART_NUMBER when a part exceeds upload_part_count', async () => {
+    await expect(
+      service.presignParts('video-1', 'user-1', [1, 4]),
+    ).rejects.toMatchObject({ errorCode: 'INVALID_PART_NUMBER' });
+  });
+
+  it('presigns each requested part and passes the configured expiresIn', async () => {
+    const result = await service.presignParts('video-1', 'user-1', [2, 1]);
+
+    expect(result.expiresIn).toBe(uploadCfg.uploadUrlExpiresSeconds);
+    expect(result.parts).toEqual([
+      { partNumber: 2, url: 'https://presigned.example/2' },
+      { partNumber: 1, url: 'https://presigned.example/1' },
+    ]);
+    expect(storageService.presignUploadPart).toHaveBeenCalledWith(
+      'video-1/original',
+      'upload-id-1',
+      2,
+      uploadCfg.uploadUrlExpiresSeconds,
+    );
   });
 });

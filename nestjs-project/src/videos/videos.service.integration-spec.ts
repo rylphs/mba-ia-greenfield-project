@@ -9,6 +9,7 @@ import {
   cleanAllTables,
   createTestDataSource,
 } from '../test/create-test-data-source';
+import { requestViaInternalNetwork } from '../test/minio';
 import { User } from '../users/entities/user.entity';
 import { Video } from './entities/video.entity';
 import { VideosService } from './videos.service';
@@ -126,4 +127,79 @@ describe('VideosService.createUpload (integration)', () => {
     const rows = await videoRepository.find();
     expect(rows).toHaveLength(0);
   });
+});
+
+describe('VideosService.presignParts (integration)', () => {
+  let dataSource: DataSource;
+  let userRepository: Repository<User>;
+  let videoRepository: Repository<Video>;
+  let channelsService: ChannelsService;
+  let storageService: StorageService;
+  let videosService: VideosService;
+
+  beforeAll(async () => {
+    dataSource = createTestDataSource(ALL_ENTITIES);
+    await dataSource.initialize();
+    userRepository = dataSource.getRepository(User);
+    videoRepository = dataSource.getRepository(Video);
+    channelsService = new ChannelsService(dataSource);
+
+    storageService = new StorageService(
+      buildS3Client(storageCfg.endpoint),
+      buildS3Client(storageCfg.publicEndpoint),
+      storageCfg as any,
+    );
+
+    videosService = new VideosService(
+      videoRepository,
+      channelsService,
+      storageService,
+      uploadCfg as any,
+    );
+  });
+
+  afterAll(async () => {
+    await dataSource.destroy();
+  });
+
+  beforeEach(async () => {
+    await cleanAllTables(dataSource);
+  });
+
+  let userCounter = 0;
+  async function createUserWithChannel(): Promise<{ userId: string }> {
+    const email = `videos_presign_${++userCounter}@example.com`;
+    const user = await userRepository.save(
+      userRepository.create({ email, password: 'hashed' }),
+    );
+    await channelsService.createChannel(user.id, email);
+    return { userId: user.id };
+  }
+
+  it('returns a presigned URL that accepts a PUT and returns an ETag', async () => {
+    const { userId } = await createUserWithChannel();
+    const upload = await videosService.createUpload(userId, {
+      fileName: 'ferias.mp4',
+      fileSize: 1024,
+      contentType: 'video/mp4',
+    });
+
+    const result = await videosService.presignParts(
+      upload.videoId,
+      userId,
+      [1],
+    );
+
+    expect(result.parts).toHaveLength(1);
+    const res = await requestViaInternalNetwork(result.parts[0].url, {
+      method: 'PUT',
+      body: Buffer.from('hello world'),
+    });
+
+    expect(res.status).toBe(200);
+    expect(res.headers.etag).toBeTruthy();
+    expect(new URL(result.parts[0].url).hostname).toBe(
+      new URL(storageCfg.publicEndpoint).hostname,
+    );
+  }, 30000);
 });
