@@ -25,10 +25,10 @@ Deliver the backend foundation for videos — object storage for videos and thum
 
 **Technical actions:**
 
-1. Instalar no container `nestjs-api`: `@nestjs/bullmq@^11.0.5` (linha CommonJS 11.x — 12.x é ESM-only), `bullmq@^6.3.8`, `@aws-sdk/client-s3@^3.1138.0`, `@aws-sdk/s3-request-presigner@^3.1138.0` (per `phase-03-videos/TD-01`, `phase-03-videos/TD-05`, `phase-03-videos/TD-06`)
+1. Instalar no container `nestjs-api`: `@nestjs/bullmq@^11.0.5` (linha CommonJS 11.x — 12.x é ESM-only), `bullmq@^6.3.8`, `@aws-sdk/client-s3@^3.1140.0`, `@aws-sdk/s3-request-presigner@^3.1140.0` (per `phase-03-videos/TD-01`, `phase-03-videos/TD-05`, `phase-03-videos/TD-06`)
 2. Adicionar serviço `redis` em `nestjs-project/compose.yaml` com `command` contendo `--maxmemory-policy noeviction --appendonly yes`, volume nomeado para AOF e healthcheck `redis-cli ping` (per `phase-03-videos/TD-01`)
-3. Adicionar serviço `minio` (`quay.io/minio/minio:<tag pinada da última release community>`, `server /data --console-address :9001`, portas `9000`/`9001`, volume nomeado, `MINIO_API_STALE_UPLOADS_EXPIRY=24h` explícito, healthcheck em `/minio/health/live`) (per `phase-03-videos/TD-03`, `phase-03-videos/TD-15`)
-4. Adicionar serviço one-shot `minio-init` (`quay.io/minio/mc`, `depends_on: minio: service_healthy`) que cria os buckets `videos` e `thumbnails`, aplica `mc anonymous set download <alias>/thumbnails` e configura CORS para a origem pública com `ETag` exposto no bucket `videos` — mecanismo de CORS do MinIO confirmado via context7 no momento da implementação (per `phase-03-videos/TD-04`, `phase-03-videos/TD-05`)
+3. Adicionar serviço `minio` (`cgr.dev/chainguard/minio:latest-dev` pinado por digest — builds community do MinIO deixaram de ser publicados no Docker Hub/quay.io; a variante `-dev` traz `wget` para o healthcheck —, `server /data --console-address :9001`, portas `9000`/`9001`, volume nomeado, `MINIO_API_STALE_UPLOADS_EXPIRY=24h` explícito, healthcheck em `/minio/health/live`) e CORS server-wide via `MINIO_API_CORS_ALLOW_ORIGIN=<origem pública>` — o MinIO community não tem API de CORS por bucket, e `ETag` já faz parte dos headers expostos por padrão (per `phase-03-videos/TD-03`, `phase-03-videos/TD-05`, `phase-03-videos/TD-15`)
+4. Adicionar serviço one-shot `minio-init` (`cgr.dev/chainguard/minio-client:latest-dev` pinado por digest, `depends_on: minio: service_healthy`) que cria os buckets `videos` e `thumbnails` (`mc mb --ignore-existing`) e aplica em `thumbnails` uma política anônima só com `s3:GetObject` via `mc anonymous set-json` — a política canned `download` também concede `s3:ListBucket`, o que permitiria enumerar todos os `videoId` (inclusive rascunhos) pelas chaves das thumbnails (per `phase-03-videos/TD-04`)
 5. Fazer `nestjs-api` depender de `redis` (`service_healthy`) e `minio-init` (`service_completed_successfully`); adicionar ao `.env.example` e `.env` as chaves `REDIS_HOST=redis`, `REDIS_PORT=6379`, `S3_ENDPOINT=http://minio:9000`, `S3_PUBLIC_ENDPOINT=http://localhost:9000`, `S3_REGION`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`, `S3_VIDEOS_BUCKET=videos`, `S3_THUMBNAILS_BUCKET=thumbnails` (nomes de serviço do Compose, nunca `localhost` para tráfego entre containers — `S3_PUBLIC_ENDPOINT` é o único endpoint voltado ao host) e atualizar a seção "Environment Startup Verification" de `nestjs-project/CLAUDE.md` com as verificações de prontidão de `redis` e `minio`
 
 **Tests:** _(empty — Infra)_
@@ -39,8 +39,8 @@ Deliver the backend foundation for videos — object storage for videos and thum
 
 - `docker compose up -d` deixa `redis` e `minio` com status `healthy` e `minio-init` com exit code `0`
 - `docker compose exec redis redis-cli CONFIG GET maxmemory-policy` retorna `noeviction` e `CONFIG GET appendonly` retorna `yes`
-- Após o init, os buckets `videos` e `thumbnails` existem; um objeto em `thumbnails` é legível via `GET http://localhost:9000/thumbnails/<key>` sem credenciais, e um objeto em `videos` retorna `403` sem assinatura
-- Um preflight `OPTIONS` de CORS em `http://localhost:9000/videos/<key>` a partir da origem pública configurada retorna `ETag` em `Access-Control-Expose-Headers`
+- Após o init, os buckets `videos` e `thumbnails` existem; um objeto em `thumbnails` é legível via `GET http://localhost:9000/thumbnails/<key>` sem credenciais, a listagem anônima `GET http://localhost:9000/thumbnails/` retorna `403`, e um objeto em `videos` retorna `403` sem assinatura
+- Um preflight `OPTIONS` de CORS com `Access-Control-Request-Method: PUT` em `http://localhost:9000/videos/<key>` a partir da origem pública configurada retorna `Access-Control-Allow-Origin` com essa origem (e nenhum para outras origens), e a resposta à requisição real a partir dessa origem inclui `ETag` em `Access-Control-Expose-Headers`
 - `docker compose exec nestjs-api npm ls @nestjs/bullmq` mostra versão `11.x`
 
 ---
@@ -538,7 +538,7 @@ Any other transition is rejected. `publication_status` stays `draft` throughout 
 | Bucket | Access | Object key | Content |
 |--------|--------|------------|---------|
 | `videos` | private — presigned URLs only | `{videoId}/original` | Uploaded source video (multipart target) |
-| `thumbnails` | anonymous read (`mc anonymous set download`) | `{videoId}.jpg` | JPEG thumbnail, width 1280, aspect ratio preserved (per phase-03-videos/TD-09 revision) |
+| `thumbnails` | anonymous read — `s3:GetObject` only, no listing (`mc anonymous set-json`) | `{videoId}.jpg` | JPEG thumbnail, width 1280, aspect ratio preserved (per phase-03-videos/TD-09 revision) |
 
 Keys use `videoId` (UUID), never the public `slug`.
 
