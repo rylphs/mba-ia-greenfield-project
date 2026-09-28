@@ -14,9 +14,11 @@ import {
   cleanAllTables,
   createTestDataSource,
 } from '../test/create-test-data-source';
-import { requestViaInternalNetwork } from '../test/minio';
+import { requestViaInternalNetwork, uploadTestObject } from '../test/minio';
 import { User } from '../users/entities/user.entity';
+import { videoObjectKey } from '../storage/storage-keys';
 import { Video, VideoProcessingStatus } from './entities/video.entity';
+import { generateVideoSlug } from './video-slug';
 import { VideosService } from './videos.service';
 
 const ALL_ENTITIES = [User, Channel, RefreshToken, VerificationToken, Video];
@@ -516,5 +518,85 @@ describe('VideosService.completeUpload — real size over the limit (integration
 
     const job = await fx.queue.getJob(videoId);
     expect(job).toBeUndefined();
+  }, 30000);
+});
+
+describe('VideosService.getStreamUrl (integration)', () => {
+  let dataSource: DataSource;
+  let userRepository: Repository<User>;
+  let videoRepository: Repository<Video>;
+  let channelsService: ChannelsService;
+  let storageService: StorageService;
+  let videosService: VideosService;
+
+  beforeAll(async () => {
+    dataSource = createTestDataSource(ALL_ENTITIES);
+    await dataSource.initialize();
+    userRepository = dataSource.getRepository(User);
+    videoRepository = dataSource.getRepository(Video);
+    channelsService = new ChannelsService(dataSource);
+
+    storageService = new StorageService(
+      buildS3Client(storageCfg.endpoint),
+      buildS3Client(storageCfg.publicEndpoint),
+      storageCfg as any,
+    );
+
+    videosService = new VideosService(
+      videoRepository,
+      channelsService,
+      storageService,
+      { ...uploadCfg, streamUrlExpiresSeconds: 21600 } as any,
+      NOOP_VIDEO_PROCESSING_CFG,
+      NOOP_QUEUE,
+    );
+  });
+
+  afterAll(async () => {
+    await dataSource.destroy();
+  });
+
+  beforeEach(async () => {
+    await cleanAllTables(dataSource);
+  });
+
+  let userCounter = 0;
+  async function createReadyVideo(): Promise<{
+    userId: string;
+    slug: string;
+  }> {
+    const email = `videos_stream_${++userCounter}@example.com`;
+    const user = await userRepository.save(
+      userRepository.create({ email, password: 'hashed' }),
+    );
+    const channel = await channelsService.createChannel(user.id, email);
+    const body = Buffer.alloc(2048, 'x');
+    const video = await videoRepository.save(
+      videoRepository.create({
+        slug: generateVideoSlug(),
+        channel_id: channel.id,
+        title: 'ferias',
+        original_filename: 'ferias.mp4',
+        content_type: 'video/mp4',
+        declared_size_bytes: body.length,
+        upload_part_size_bytes: body.length,
+        upload_part_count: 1,
+        processing_status: VideoProcessingStatus.READY,
+      }),
+    );
+    await uploadTestObject(storageService, videoObjectKey(video.id), body);
+    return { userId: user.id, slug: video.slug };
+  }
+
+  it('returns a presigned URL that serves a Range request with 206', async () => {
+    const { userId, slug } = await createReadyVideo();
+
+    const url = await videosService.getStreamUrl(slug, userId);
+
+    const response = await requestViaInternalNetwork(url, {
+      headers: { Range: 'bytes=0-1023' },
+    });
+    expect(response.status).toBe(206);
+    expect(response.body.length).toBe(1024);
   }, 30000);
 });

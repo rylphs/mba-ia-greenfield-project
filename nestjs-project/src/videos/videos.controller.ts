@@ -3,10 +3,12 @@ import {
   Controller,
   Get,
   HttpCode,
+  HttpRedirectResponse,
   HttpStatus,
   Param,
   ParseUUIDPipe,
   Post,
+  Redirect,
 } from '@nestjs/common';
 import {
   ApiBearerAuth,
@@ -25,6 +27,7 @@ import { PresignPartsResponseDto } from './dto/presign-parts-response.dto';
 import { UploadedPartsResponseDto } from './dto/uploaded-parts-response.dto';
 import { CompleteUploadDto } from './dto/complete-upload.dto';
 import { CompleteUploadResponseDto } from './dto/complete-upload-response.dto';
+import { VideoSlugParamDto } from './dto/video-slug-param.dto';
 import { VideosService } from './videos.service';
 
 @ApiTags('videos')
@@ -222,5 +225,48 @@ export class VideosController {
     @Body() dto: CompleteUploadDto,
   ): Promise<CompleteUploadResponseDto> {
     return this.videosService.completeUpload(id, user.sub, dto.parts);
+  }
+
+  @Get(':slug/stream')
+  @Redirect(undefined, HttpStatus.FOUND)
+  @ApiBearerAuth('access-token')
+  @ApiOperation({
+    summary: 'Stream a video',
+    description:
+      'Authorizes and redirects to a presigned GetObject URL; storage serves Range requests natively, so no bytes pass through the API.',
+  })
+  @ApiResponse({
+    status: 302,
+    description: 'Redirect to a presigned GET URL',
+  })
+  @ApiResponse({
+    status: 400,
+    description: 'VALIDATION_ERROR',
+    schema: { $ref: getSchemaPath(ApiErrorEnvelope) },
+  })
+  @ApiResponse({
+    status: 401,
+    description: 'Missing or invalid access token',
+    schema: { $ref: getSchemaPath(ApiErrorEnvelope) },
+  })
+  @ApiResponse({
+    status: 404,
+    description: 'VIDEO_NOT_FOUND',
+    schema: { $ref: getSchemaPath(ApiErrorEnvelope) },
+  })
+  @ApiResponse({
+    status: 409,
+    description: 'VIDEO_NOT_READY',
+    schema: { $ref: getSchemaPath(ApiErrorEnvelope) },
+  })
+  async stream(
+    @CurrentUser() user: JwtPayload,
+    @Param() params: VideoSlugParamDto,
+  ): Promise<HttpRedirectResponse> {
+    const url = await this.videosService.getStreamUrl(
+      params.slug,
+      user.sub,
+    );
+    return { url, statusCode: HttpStatus.FOUND };
   }
 }

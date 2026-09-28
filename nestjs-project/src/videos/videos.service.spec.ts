@@ -385,3 +385,75 @@ describe('VideosService.completeUpload', () => {
     expect(queue.add).not.toHaveBeenCalled();
   });
 });
+
+describe('VideosService.getStreamUrl', () => {
+  const uploadCfg = { streamUrlExpiresSeconds: 21600 };
+
+  let storageService: { presignGetObject: jest.Mock };
+  let queryBuilder: { innerJoin: jest.Mock; where: jest.Mock; getOne: jest.Mock };
+  let videoRepo: { createQueryBuilder: jest.Mock };
+  let service: VideosService;
+
+  beforeEach(() => {
+    storageService = {
+      presignGetObject: jest
+        .fn()
+        .mockResolvedValue('https://public/presigned-stream'),
+    };
+    queryBuilder = {
+      innerJoin: jest.fn().mockReturnThis(),
+      where: jest.fn().mockReturnThis(),
+      getOne: jest.fn().mockResolvedValue({
+        id: 'video-1',
+        slug: 'abcdefghijk',
+        processing_status: VideoProcessingStatus.READY,
+      }),
+    };
+    videoRepo = { createQueryBuilder: jest.fn().mockReturnValue(queryBuilder) };
+
+    service = new VideosService(
+      videoRepo as any,
+      {} as unknown as ChannelsService,
+      storageService as unknown as StorageService,
+      uploadCfg as any,
+      NOOP_VIDEO_PROCESSING_CFG,
+      NOOP_QUEUE,
+    );
+  });
+
+  it('throws VIDEO_NOT_FOUND when no owned video matches the slug', async () => {
+    queryBuilder.getOne.mockResolvedValue(null);
+
+    await expect(
+      service.getStreamUrl('abcdefghijk', 'user-1'),
+    ).rejects.toMatchObject({ errorCode: 'VIDEO_NOT_FOUND' });
+    expect(storageService.presignGetObject).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    VideoProcessingStatus.PROCESSING,
+    VideoProcessingStatus.FAILED,
+    VideoProcessingStatus.AWAITING_UPLOAD,
+  ])('throws VIDEO_NOT_READY when processing_status is %s', async (status) => {
+    queryBuilder.getOne.mockResolvedValue({
+      id: 'video-1',
+      slug: 'abcdefghijk',
+      processing_status: status,
+    });
+
+    await expect(
+      service.getStreamUrl('abcdefghijk', 'user-1'),
+    ).rejects.toMatchObject({ errorCode: 'VIDEO_NOT_READY' });
+    expect(storageService.presignGetObject).not.toHaveBeenCalled();
+  });
+
+  it('presigns a GET URL with no content-disposition and expiresIn = streamUrlExpiresSeconds', async () => {
+    const url = await service.getStreamUrl('abcdefghijk', 'user-1');
+
+    expect(url).toBe('https://public/presigned-stream');
+    expect(storageService.presignGetObject).toHaveBeenCalledWith(
+      'video-1/original',
+      21600,
+    );
+  });
+});

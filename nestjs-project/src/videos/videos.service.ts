@@ -3,12 +3,13 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { InjectQueue } from '@nestjs/bullmq';
 import type { ConfigType } from '@nestjs/config';
 import type { Queue } from 'bullmq';
-import { Repository } from 'typeorm';
+import { Repository, SelectQueryBuilder } from 'typeorm';
 import {
   InvalidPartNumberException,
   InvalidVideoStateException,
   UnsupportedVideoTypeException,
   VideoNotFoundException,
+  VideoNotReadyException,
   VideoTooLargeException,
 } from '../common/exceptions/domain.exception';
 import { isPgUniqueViolationOnColumn } from '../common/typeorm/pg-errors';
@@ -128,12 +129,16 @@ export class VideosService {
     });
   }
 
-  async findOwnedById(videoId: string, userId: string): Promise<Video> {
-    const video = await this.videoRepo
+  private ownedVideoQueryBuilder(userId: string): SelectQueryBuilder<Video> {
+    return this.videoRepo
       .createQueryBuilder('video')
       .innerJoin('video.channel', 'channel', 'channel.user_id = :userId', {
         userId,
-      })
+      });
+  }
+
+  async findOwnedById(videoId: string, userId: string): Promise<Video> {
+    const video = await this.ownedVideoQueryBuilder(userId)
       .where('video.id = :videoId', { videoId })
       .getOne();
 
@@ -141,6 +146,28 @@ export class VideosService {
       throw new VideoNotFoundException();
     }
     return video;
+  }
+
+  async findOwnedReadyBySlug(slug: string, userId: string): Promise<Video> {
+    const video = await this.ownedVideoQueryBuilder(userId)
+      .where('video.slug = :slug', { slug })
+      .getOne();
+
+    if (!video) {
+      throw new VideoNotFoundException();
+    }
+    if (video.processing_status !== VideoProcessingStatus.READY) {
+      throw new VideoNotReadyException();
+    }
+    return video;
+  }
+
+  async getStreamUrl(slug: string, userId: string): Promise<string> {
+    const video = await this.findOwnedReadyBySlug(slug, userId);
+    return this.storageService.presignGetObject(
+      videoObjectKey(video.id),
+      this.uploadCfg.streamUrlExpiresSeconds,
+    );
   }
 
   assertAwaitingUpload(

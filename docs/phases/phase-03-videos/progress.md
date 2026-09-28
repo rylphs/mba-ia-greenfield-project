@@ -1,7 +1,7 @@
 # phase-03-videos — Progress
 
 **Status:** in_progress
-**SIs:** 12/15 completed
+**SIs:** 13/15 completed
 
 ### SI-03.1 — Infra: dependências, Redis e MinIO no Compose
 - **Status:** completed
@@ -120,9 +120,15 @@
   - `/simplify`: removi o guard-clause redundante em `process()` (checagem separada de `READY` antes da checagem `!== PROCESSING`, que já cobre `READY`); colapsei os dois testes de "skip" (status `READY`/`AWAITING_UPLOAD`) num `it.each`; extraí a classificação de erro do `execFile` (`code` numérico + `killed` falso) para `src/common/child-process/exec-errors.ts` (`isExecNonZeroExit`), espelhando o precedente `src/common/typeorm/pg-errors.ts` de classificador de erro compartilhado — a mesma armadilha de realm entre Jest e `child_process` pode reaparecer em qualquer código futuro que rode `execFile`/`exec`, então o helper fica num lugar central em vez de reinventado por call site; movi a expiração do GET interno pré-assinado (antes um literal local `INTERNAL_URL_EXPIRES_SECONDS = 900`) para `videoProcessingConfig.internalGetUrlExpiresSeconds` (env `VIDEO_PROCESSING_INTERNAL_GET_URL_EXPIRES_SECONDS`, default 900), seguindo o mesmo padrão `registerAs`/`ConfigType` de `uploadUrlExpiresSeconds`/`streamUrlExpiresSeconds` em `upload.config.ts` — adicionado a `env.validation.ts`, `.env` e `.env.example`; troquei a construção manual de `S3Client`/`storageCfg` no integration test por `Test.createTestingModule` + `StorageModule` (mesmo padrão de `storage.service.integration-spec.ts`), eliminando uma segunda cópia divergente da lista de env vars de storage. Não apliquei a sugestão de Altitude de dividir `VideoProcessingModule` em um módulo `FfmpegModule` enxuto + um módulo de wiring de fila — a Technical action 5 do plano desta SI especifica explicitamente que `VideoProcessingModule` registra `TypeOrmModule.forFeature([Video])`, `StorageModule`, `BullModule.registerQueue(...)`, `VideoProcessingService` e `VideoProcessor` como um único módulo; dividir a estrutura de módulos contradiria o plano, que é o contrato desta fase.
 
 ### SI-03.13 — Endpoint GET /videos/{slug}/stream (streaming via redirect)
-- **Status:** pending
-- **Tests:** —
-- **Observations:** none
+- **Status:** completed
+- **Tests:** 34 passing
+- **Observations:**
+  - `getStreamUrl` reutiliza `StorageService.presignGetObject` (cliente público, sem `contentDisposition`) já existente desde a SI-05; e `STREAM_URL_EXPIRES_SECONDS`/`uploadCfg.streamUrlExpiresSeconds` já estavam declarados em `upload.config.ts` desde antes desta SI (nenhuma config nova precisou ser criada).
+  - `findOwnedReadyBySlug` espelha o `QueryBuilder` de `findOwnedById` (join em `channel.user_id`), mas filtrando por `slug` e adicionando o guard de `processing_status !== READY` → `VideoNotReadyException` (409), separado do guard de existência/posse → `VideoNotFoundException` (404), preservando a distinção de erro exigida pelos ACs.
+  - `VideoSlugParamDto` é o primeiro DTO de path-param do projeto (rotas anteriores usam `@Param('id', ParseUUIDPipe)` direto); usa `@Matches(/^[A-Za-z0-9_-]{11}$/)` validado pelo `ValidationPipe` global via `@Param() params: VideoSlugParamDto` (bind do objeto `params` inteiro, não de uma chave individual).
+  - Endpoint usa `@Res() res: Response` + `res.redirect(302, url)` (primeiro 302 do projeto) em vez de retorno serializado — decisão necessária porque Nest não tem um shortcut declarativo para redirect com `ApiResponse` fora do `@Redirect()` decorator, que exige URL estática; optei por `@Res()` para manter a URL pré-assinada dinâmica.
+  - Autoria via JIT spec (`nestjs-project/specs/videos-stream.plan.md`, Step 3a): gerei `test/videos-stream.e2e-spec.ts` com os 6 cenários do spec, seguindo o mesmo fixture/bootstrap pattern de `videos-upload-complete.e2e-spec.ts` (roteamento via `requestViaInternalNetwork` para `Range`, já que `S3_PUBLIC_ENDPOINT` não é alcançável de dentro do container).
+  - `/simplify`: extraí `ownedVideoQueryBuilder(userId)` privado em `VideosService` (Reuse+Simplification+Altitude convergiram na mesma observação) — `findOwnedById` e `findOwnedReadyBySlug` compartilhavam o `QueryBuilder`/join de posse idêntico, duplicado byte-a-byte exceto pelo `where`; agora ambos aplicam seu próprio `.where(...)` sobre a base compartilhada. Troquei `@Res() res: Response` + `res.redirect(...)` no endpoint por `@Redirect(undefined, HttpStatus.FOUND)` + retorno de `HttpRedirectResponse` (Altitude — confirmei via context7/docs.nestjs.com que `@Redirect()` suporta override dinâmico retornando `{ url, statusCode }`, então usar `@Res()` era um bandaid desnecessário que teria sido copiado pela SI-03.14 seguinte). Exportei `VIDEO_SLUG_PATTERN` de `video-slug.ts` e importei em `VideoSlugParamDto` em vez de duplicar o regex `^[A-Za-z0-9_-]{11}$` como literal solto (Reuse — mantém o formato do slug amarrado à função geradora). Não apliquei a sugestão de Simplification de extrair os helpers `registerConfirmAndLogin`/`uploadAndCompleteReadyVideo` (duplicados em 4 arquivos `*.e2e-spec.ts`) para um módulo compartilhado — exigiria editar os 3 specs e2e já existentes de SIs anteriores, fora do escopo desta SI; fica como observação para uma futura SI/task de consolidação de fixtures e2e. Reexecutei os 34 testes após os fixes — todos passando.
 
 ### SI-03.14 — Endpoint GET /videos/{slug}/download (download via redirect)
 - **Status:** pending
