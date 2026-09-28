@@ -1,28 +1,12 @@
 import { Test } from '@nestjs/testing';
 import { ConfigModule } from '@nestjs/config';
 import storageConfig from '../config/storage.config';
-import { requestViaInternalNetwork } from '../test/minio';
+import { requestViaInternalNetwork, uploadTestObject } from '../test/minio';
 import { thumbnailObjectKey, videoObjectKey } from './storage-keys';
 import { StorageModule } from './storage.module';
 import { StorageService } from './storage.service';
 
 const internalS3 = new URL(process.env.S3_ENDPOINT!);
-
-async function uploadTestObject(
-  storageService: StorageService,
-  key: string,
-  body: Buffer,
-): Promise<{ uploadId: string; etag: string; partUrl: string }> {
-  const uploadId = await storageService.createMultipartUpload(key, 'video/mp4');
-  const partUrl = await storageService.presignUploadPart(key, uploadId, 1, 60);
-  const etag = (
-    await requestViaInternalNetwork(partUrl, { method: 'PUT', body })
-  ).headers.etag as string;
-  await storageService.completeMultipartUpload(key, uploadId, [
-    { ETag: etag, PartNumber: 1 },
-  ]);
-  return { uploadId, etag, partUrl };
-}
 
 describe('StorageService (integration)', () => {
   let storageService: StorageService;

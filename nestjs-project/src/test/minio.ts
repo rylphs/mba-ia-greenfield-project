@@ -1,4 +1,5 @@
 import * as http from 'http';
+import type { StorageService } from '../storage/storage.service';
 
 // S3_PUBLIC_ENDPOINT (http://localhost:9000) is the browser-facing host and is not
 // reachable from inside this container (see nestjs-project/compose.yaml — only 3000
@@ -53,4 +54,21 @@ export function requestViaInternalNetwork(
     if (options.body) req.write(options.body);
     req.end();
   });
+}
+
+export async function uploadTestObject(
+  storageService: StorageService,
+  key: string,
+  body: Buffer,
+  contentType = 'video/mp4',
+): Promise<{ uploadId: string; etag: string; partUrl: string }> {
+  const uploadId = await storageService.createMultipartUpload(key, contentType);
+  const partUrl = await storageService.presignUploadPart(key, uploadId, 1, 60);
+  const etag = (
+    await requestViaInternalNetwork(partUrl, { method: 'PUT', body })
+  ).headers.etag as string;
+  await storageService.completeMultipartUpload(key, uploadId, [
+    { ETag: etag, PartNumber: 1 },
+  ]);
+  return { uploadId, etag, partUrl };
 }
