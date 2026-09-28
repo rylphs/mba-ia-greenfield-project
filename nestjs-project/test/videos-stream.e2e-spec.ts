@@ -59,7 +59,11 @@ async function uploadAndCompleteReadyVideo(
   const createRes = await request(app.getHttpServer())
     .post('/videos')
     .set('Authorization', `Bearer ${accessToken}`)
-    .send({ fileName: 'ferias.mp4', fileSize: body.length, contentType: 'video/mp4' })
+    .send({
+      fileName: 'ferias.mp4',
+      fileSize: body.length,
+      contentType: 'video/mp4',
+    })
     .expect(201);
   const { videoId, slug } = createRes.body;
 

@@ -390,7 +390,11 @@ describe('VideosService.getStreamUrl', () => {
   const uploadCfg = { streamUrlExpiresSeconds: 21600 };
 
   let storageService: { presignGetObject: jest.Mock };
-  let queryBuilder: { innerJoin: jest.Mock; where: jest.Mock; getOne: jest.Mock };
+  let queryBuilder: {
+    innerJoin: jest.Mock;
+    where: jest.Mock;
+    getOne: jest.Mock;
+  };
   let videoRepo: { createQueryBuilder: jest.Mock };
   let service: VideosService;
 

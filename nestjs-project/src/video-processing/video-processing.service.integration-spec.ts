@@ -126,11 +126,7 @@ describe('VideoProcessingService.process (integration)', () => {
       }),
     );
 
-    await uploadTestObject(
-      storageService,
-      videoObjectKey(video.id),
-      fixture,
-    );
+    await uploadTestObject(storageService, videoObjectKey(video.id), fixture);
 
     return { videoId: video.id };
   }
@@ -148,9 +144,7 @@ describe('VideoProcessingService.process (integration)', () => {
     expect(Number(persisted?.duration)).toBeCloseTo(2, 0);
     expect(persisted?.thumbnail_key).toBe(`${videoId}.jpg`);
 
-    const publicUrl = storageService.getThumbnailPublicUrl(
-      `${videoId}.jpg`,
-    );
+    const publicUrl = storageService.getThumbnailPublicUrl(`${videoId}.jpg`);
     const response = await requestViaInternalNetwork(publicUrl);
     expect(response.status).toBe(200);
     expect(response.body.subarray(0, 2)).toEqual(Buffer.from([0xff, 0xd8]));

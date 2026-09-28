@@ -9,9 +9,7 @@ import { VideoProcessingService } from './video-processing.service';
 
 @Processor(VIDEO_PROCESSING_QUEUE)
 export class VideoProcessor extends WorkerHost {
-  constructor(
-    private readonly videoProcessingService: VideoProcessingService,
-  ) {
+  constructor(private readonly videoProcessingService: VideoProcessingService) {
     super();
   }
 
@@ -29,7 +27,10 @@ export class VideoProcessor extends WorkerHost {
     }
     const attempts = job.opts.attempts ?? 1;
     if (err instanceof UnrecoverableError || job.attemptsMade >= attempts) {
-      await this.videoProcessingService.markFailed(job.data.videoId, err.message);
+      await this.videoProcessingService.markFailed(
+        job.data.videoId,
+        err.message,
+      );
     }
   }
 }

@@ -561,9 +561,7 @@ describe('VideosService presigned playback URLs (integration)', () => {
   });
 
   let userCounter = 0;
-  async function createReadyVideo(
-    originalFilename = 'ferias.mp4',
-  ): Promise<{
+  async function createReadyVideo(originalFilename = 'ferias.mp4'): Promise<{
     userId: string;
     slug: string;
   }> {

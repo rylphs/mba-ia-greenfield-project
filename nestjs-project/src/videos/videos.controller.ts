@@ -263,10 +263,7 @@ export class VideosController {
     @CurrentUser() user: JwtPayload,
     @Param() params: VideoSlugParamDto,
   ): Promise<HttpRedirectResponse> {
-    const url = await this.videosService.getStreamUrl(
-      params.slug,
-      user.sub,
-    );
+    const url = await this.videosService.getStreamUrl(params.slug, user.sub);
     return { url, statusCode: HttpStatus.FOUND };
   }
 
@@ -306,10 +303,7 @@ export class VideosController {
     @CurrentUser() user: JwtPayload,
     @Param() params: VideoSlugParamDto,
   ): Promise<HttpRedirectResponse> {
-    const url = await this.videosService.getDownloadUrl(
-      params.slug,
-      user.sub,
-    );
+    const url = await this.videosService.getDownloadUrl(params.slug, user.sub);
     return { url, statusCode: HttpStatus.FOUND };
   }
 }
