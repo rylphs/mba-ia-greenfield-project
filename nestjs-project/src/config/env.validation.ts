@@ -40,4 +40,7 @@ export const envValidationSchema = Joi.object({
   VIDEO_PROCESSING_ATTEMPTS: Joi.number().positive().default(3),
   VIDEO_PROCESSING_BACKOFF_MS: Joi.number().positive().default(1000),
   FFMPEG_TIMEOUT_MS: Joi.number().positive().default(30000),
+  VIDEO_PROCESSING_INTERNAL_GET_URL_EXPIRES_SECONDS: Joi.number()
+    .positive()
+    .default(900),
 });

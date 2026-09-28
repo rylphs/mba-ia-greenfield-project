@@ -5,6 +5,7 @@ import { DatabaseModule } from './database/database.module';
 import { QueueModule } from './queue/queue.module';
 import { StorageService } from './storage/storage.service';
 import { FfmpegService } from './video-processing/ffmpeg/ffmpeg.service';
+import { VideoProcessingModule } from './video-processing/video-processing.module';
 import { WorkerModule } from './worker.module';
 
 // DatabaseModule's real DB connection is already covered by
@@ -17,6 +18,15 @@ class NoopDatabaseModule {}
 @Module({})
 class NoopQueueModule {}
 
+// VideoProcessingModule (SI-03.12) registers TypeOrmModule.forFeature([Video])
+// and BullModule.registerQueue(...), both of which resolve against the real
+// DatabaseModule/QueueModule connections stubbed out above — swap it for a
+// stub that still exposes the FfmpegService this test asserts on, without
+// pulling in VideoProcessingService/VideoProcessor (covered by their own
+// specs, not by this DI-wiring test).
+@Module({ providers: [FfmpegService], exports: [FfmpegService] })
+class NoopVideoProcessingModule {}
+
 describe('WorkerModule', () => {
   it('compiles with FfmpegService and StorageService wired, and registers no HTTP controllers', async () => {
     const module = await Test.createTestingModule({
@@ -26,6 +36,8 @@ describe('WorkerModule', () => {
       .useModule(NoopDatabaseModule)
       .overrideModule(QueueModule)
       .useModule(NoopQueueModule)
+      .overrideModule(VideoProcessingModule)
+      .useModule(NoopVideoProcessingModule)
       .compile();
 
     expect(module.get(FfmpegService)).toBeDefined();
