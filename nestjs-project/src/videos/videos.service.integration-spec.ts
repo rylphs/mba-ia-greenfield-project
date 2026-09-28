@@ -521,7 +521,7 @@ describe('VideosService.completeUpload — real size over the limit (integration
   }, 30000);
 });
 
-describe('VideosService.getStreamUrl (integration)', () => {
+describe('VideosService presigned playback URLs (integration)', () => {
   let dataSource: DataSource;
   let userRepository: Repository<User>;
   let videoRepository: Repository<Video>;
@@ -561,11 +561,13 @@ describe('VideosService.getStreamUrl (integration)', () => {
   });
 
   let userCounter = 0;
-  async function createReadyVideo(): Promise<{
+  async function createReadyVideo(
+    originalFilename = 'ferias.mp4',
+  ): Promise<{
     userId: string;
     slug: string;
   }> {
-    const email = `videos_stream_${++userCounter}@example.com`;
+    const email = `videos_playback_${++userCounter}@example.com`;
     const user = await userRepository.save(
       userRepository.create({ email, password: 'hashed' }),
     );
@@ -576,7 +578,7 @@ describe('VideosService.getStreamUrl (integration)', () => {
         slug: generateVideoSlug(),
         channel_id: channel.id,
         title: 'ferias',
-        original_filename: 'ferias.mp4',
+        original_filename: originalFilename,
         content_type: 'video/mp4',
         declared_size_bytes: body.length,
         upload_part_size_bytes: body.length,
@@ -588,15 +590,43 @@ describe('VideosService.getStreamUrl (integration)', () => {
     return { userId: user.id, slug: video.slug };
   }
 
-  it('returns a presigned URL that serves a Range request with 206', async () => {
-    const { userId, slug } = await createReadyVideo();
+  describe('getStreamUrl', () => {
+    it('returns a presigned URL that serves a Range request with 206', async () => {
+      const { userId, slug } = await createReadyVideo();
 
-    const url = await videosService.getStreamUrl(slug, userId);
+      const url = await videosService.getStreamUrl(slug, userId);
 
-    const response = await requestViaInternalNetwork(url, {
-      headers: { Range: 'bytes=0-1023' },
-    });
-    expect(response.status).toBe(206);
-    expect(response.body.length).toBe(1024);
-  }, 30000);
+      const response = await requestViaInternalNetwork(url, {
+        headers: { Range: 'bytes=0-1023' },
+      });
+      expect(response.status).toBe(206);
+      expect(response.body.length).toBe(1024);
+    }, 30000);
+  });
+
+  describe('getDownloadUrl', () => {
+    it('returns a presigned URL that responds with the attachment disposition and full body', async () => {
+      const { userId, slug } = await createReadyVideo('ferias.mp4');
+
+      const url = await videosService.getDownloadUrl(slug, userId);
+
+      const response = await requestViaInternalNetwork(url);
+      expect(response.status).toBe(200);
+      expect(response.headers['content-disposition']).toBe(
+        'attachment; filename="ferias.mp4"',
+      );
+      expect(response.body.length).toBe(2048);
+    }, 30000);
+
+    it('sanitizes a quoted original_filename in the disposition header', async () => {
+      const { userId, slug } = await createReadyVideo('fe"rias.mp4');
+
+      const url = await videosService.getDownloadUrl(slug, userId);
+
+      const response = await requestViaInternalNetwork(url);
+      expect(response.headers['content-disposition']).toBe(
+        'attachment; filename="ferias.mp4"',
+      );
+    }, 30000);
+  });
 });

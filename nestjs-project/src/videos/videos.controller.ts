@@ -269,4 +269,47 @@ export class VideosController {
     );
     return { url, statusCode: HttpStatus.FOUND };
   }
+
+  @Get(':slug/download')
+  @Redirect(undefined, HttpStatus.FOUND)
+  @ApiBearerAuth('access-token')
+  @ApiOperation({
+    summary: 'Download a video',
+    description:
+      'Authorizes and redirects to a presigned GetObject URL with an attachment Content-Disposition, so the browser downloads the file under its original name.',
+  })
+  @ApiResponse({
+    status: 302,
+    description: 'Redirect to a presigned GET URL with attachment disposition',
+  })
+  @ApiResponse({
+    status: 400,
+    description: 'VALIDATION_ERROR',
+    schema: { $ref: getSchemaPath(ApiErrorEnvelope) },
+  })
+  @ApiResponse({
+    status: 401,
+    description: 'Missing or invalid access token',
+    schema: { $ref: getSchemaPath(ApiErrorEnvelope) },
+  })
+  @ApiResponse({
+    status: 404,
+    description: 'VIDEO_NOT_FOUND',
+    schema: { $ref: getSchemaPath(ApiErrorEnvelope) },
+  })
+  @ApiResponse({
+    status: 409,
+    description: 'VIDEO_NOT_READY',
+    schema: { $ref: getSchemaPath(ApiErrorEnvelope) },
+  })
+  async download(
+    @CurrentUser() user: JwtPayload,
+    @Param() params: VideoSlugParamDto,
+  ): Promise<HttpRedirectResponse> {
+    const url = await this.videosService.getDownloadUrl(
+      params.slug,
+      user.sub,
+    );
+    return { url, statusCode: HttpStatus.FOUND };
+  }
 }

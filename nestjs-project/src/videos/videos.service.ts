@@ -31,6 +31,7 @@ import { UploadedPartsResponseDto } from './dto/uploaded-parts-response.dto';
 import { CompleteUploadPartDto } from './dto/complete-upload.dto';
 import { CompleteUploadResponseDto } from './dto/complete-upload-response.dto';
 import { generateVideoSlug } from './video-slug';
+import { buildAttachmentDisposition } from './content-disposition';
 
 const SLUG_COLUMN = 'slug';
 const MAX_SLUG_ATTEMPTS = 3;
@@ -162,11 +163,26 @@ export class VideosService {
     return video;
   }
 
-  async getStreamUrl(slug: string, userId: string): Promise<string> {
+  private async presignOwnedReadyVideoUrl(
+    slug: string,
+    userId: string,
+    disposition?: (video: Video) => string,
+  ): Promise<string> {
     const video = await this.findOwnedReadyBySlug(slug, userId);
-    return this.storageService.presignGetObject(
-      videoObjectKey(video.id),
-      this.uploadCfg.streamUrlExpiresSeconds,
+    const key = videoObjectKey(video.id);
+    const expiresIn = this.uploadCfg.streamUrlExpiresSeconds;
+    return disposition
+      ? this.storageService.presignGetObject(key, expiresIn, disposition(video))
+      : this.storageService.presignGetObject(key, expiresIn);
+  }
+
+  async getStreamUrl(slug: string, userId: string): Promise<string> {
+    return this.presignOwnedReadyVideoUrl(slug, userId);
+  }
+
+  async getDownloadUrl(slug: string, userId: string): Promise<string> {
+    return this.presignOwnedReadyVideoUrl(slug, userId, (video) =>
+      buildAttachmentDisposition(video.original_filename),
     );
   }
 

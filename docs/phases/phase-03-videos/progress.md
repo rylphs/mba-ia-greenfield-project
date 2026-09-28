@@ -1,7 +1,7 @@
 # phase-03-videos — Progress
 
 **Status:** in_progress
-**SIs:** 13/15 completed
+**SIs:** 14/15 completed
 
 ### SI-03.1 — Infra: dependências, Redis e MinIO no Compose
 - **Status:** completed
@@ -131,9 +131,12 @@
   - `/simplify`: extraí `ownedVideoQueryBuilder(userId)` privado em `VideosService` (Reuse+Simplification+Altitude convergiram na mesma observação) — `findOwnedById` e `findOwnedReadyBySlug` compartilhavam o `QueryBuilder`/join de posse idêntico, duplicado byte-a-byte exceto pelo `where`; agora ambos aplicam seu próprio `.where(...)` sobre a base compartilhada. Troquei `@Res() res: Response` + `res.redirect(...)` no endpoint por `@Redirect(undefined, HttpStatus.FOUND)` + retorno de `HttpRedirectResponse` (Altitude — confirmei via context7/docs.nestjs.com que `@Redirect()` suporta override dinâmico retornando `{ url, statusCode }`, então usar `@Res()` era um bandaid desnecessário que teria sido copiado pela SI-03.14 seguinte). Exportei `VIDEO_SLUG_PATTERN` de `video-slug.ts` e importei em `VideoSlugParamDto` em vez de duplicar o regex `^[A-Za-z0-9_-]{11}$` como literal solto (Reuse — mantém o formato do slug amarrado à função geradora). Não apliquei a sugestão de Simplification de extrair os helpers `registerConfirmAndLogin`/`uploadAndCompleteReadyVideo` (duplicados em 4 arquivos `*.e2e-spec.ts`) para um módulo compartilhado — exigiria editar os 3 specs e2e já existentes de SIs anteriores, fora do escopo desta SI; fica como observação para uma futura SI/task de consolidação de fixtures e2e. Reexecutei os 34 testes após os fixes — todos passando.
 
 ### SI-03.14 — Endpoint GET /videos/{slug}/download (download via redirect)
-- **Status:** pending
-- **Tests:** —
-- **Observations:** none
+- **Status:** completed
+- **Tests:** 16 passing
+- **Observations:**
+  - Mesmo mecanismo do streaming (SI-03.13): `getDownloadUrl` reutiliza `findOwnedReadyBySlug` e `StorageService.presignGetObject` (cliente público), passando `buildAttachmentDisposition(original_filename)` como `ResponseContentDisposition` — nenhuma config nova, reaproveita `streamUrlExpiresSeconds`.
+  - `buildAttachmentDisposition` (`src/videos/content-disposition.ts`) sanitiza removendo aspas, barras invertidas e caracteres de controle do `original_filename`, exatamente per a Technical action 1 desta SI — não usei o pacote `content-disposition` (jshttp, disponível transitivamente via `express`) apesar de resolver melhor Unicode via RFC 6266, porque ele *escapa* aspas em vez de removê-las (`fe\"rias.mp4`), o que muda o comportamento literal exigido pelo plano ("removendo aspas... do nome") e pelo AC #2 ("sem a aspa"); mantive a implementação por regex e registrei a divergência abaixo.
+  - `/simplify`: extraí `presignOwnedReadyVideoUrl(slug, userId, disposition?)` privado em `VideosService` — `getStreamUrl`/`getDownloadUrl` duplicavam o par lookup+presign byte-a-byte exceto pelo disposition (Simplification); mesclei os dois `describe` blocks de integração (`getStreamUrl (integration)` + `getDownloadUrl (integration)`) num único `describe('VideosService presigned playback URLs (integration)')` com fixture compartilhada e `describe`s aninhados, já que o setup de `beforeAll`/`beforeEach`/`createReadyVideo` era idêntico byte-a-byte entre os dois blocos (Simplification). Não apliquei a sugestão de Reuse+Altitude de trocar `buildAttachmentDisposition` pelo pacote `content-disposition` — validei via `node -e` que a lib escapa aspas (`\"`) em vez de removê-las, contradizendo a Technical action e o AC #2 desta SI, que exigem literalmente a remoção; ficou registrado acima como observação para uma futura decisão de produto (RFC 6266/mojibake em nomes acentuados é real, mas fora do que este SI pediu). Não apliquei a sugestão de Altitude de mover a sanitização de disposition para dentro de `StorageService.presignGetObject` — mudaria a assinatura/contrato de um método já testado pela SI-03.3 (`storage.service.integration-spec.ts` passa uma string de disposition pronta, não um filename), fora do escopo desta SI. Também não apliquei a sugestão de Simplification de extrair os decorators OpenAPI repetidos entre `stream()`/`download()` num decorator composto — o controller já repete blocos `@ApiResponse` idênticos (ex.: 401) em todas as 5 rotas existentes, então isso seria uma mudança de estilo fora do escopo, não uma correção de duplicação introduzida por esta SI. Reexecutei os 16 testes (`content-disposition.spec.ts` + `videos.service.integration-spec.ts` completo, via `npm test`, mais `videos-download.e2e-spec.ts` via jest-e2e) após os fixes — todos passando; `tsc --noEmit` limpo.
 
 ### SI-03.15 — Regenerar a especificação OpenAPI commitada
 - **Status:** pending
