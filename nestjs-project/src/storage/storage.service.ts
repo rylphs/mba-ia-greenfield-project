@@ -9,6 +9,7 @@ import {
   ListPartsCommand,
   PutObjectCommand,
   S3Client,
+  S3ServiceException,
   UploadPartCommand,
   type CompletedPart,
   type Part,
@@ -16,6 +17,25 @@ import {
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import storageConfig from '../config/storage.config';
 import { S3_INTERNAL_CLIENT, S3_PUBLIC_CLIENT } from './storage.constants';
+import { InvalidUploadPartsException } from '../common/exceptions/domain.exception';
+
+const INVALID_UPLOAD_PARTS_ERROR_NAMES = new Set([
+  'InvalidPart',
+  'InvalidPartOrder',
+  'NoSuchUpload',
+]);
+
+// These three codes aren't modeled as typed exceptions for CompleteMultipartUpload
+// in the SDK, so they surface as a generic S3ServiceException with `.name` set to
+// the S3 error Code. Narrowing to S3ServiceException (rather than plain `Error`)
+// keeps an unrelated error that happens to share one of these names from being
+// misclassified as INVALID_UPLOAD_PARTS.
+function isInvalidUploadPartsError(err: unknown): boolean {
+  return (
+    err instanceof S3ServiceException &&
+    INVALID_UPLOAD_PARTS_ERROR_NAMES.has(err.name)
+  );
+}
 
 @Injectable()
 export class StorageService {
@@ -61,14 +81,21 @@ export class StorageService {
     uploadId: string,
     parts: CompletedPart[],
   ): Promise<void> {
-    await this.internalClient.send(
-      new CompleteMultipartUploadCommand({
-        Bucket: this.cfg.videosBucket,
-        Key: key,
-        UploadId: uploadId,
-        MultipartUpload: { Parts: parts },
-      }),
-    );
+    try {
+      await this.internalClient.send(
+        new CompleteMultipartUploadCommand({
+          Bucket: this.cfg.videosBucket,
+          Key: key,
+          UploadId: uploadId,
+          MultipartUpload: { Parts: parts },
+        }),
+      );
+    } catch (err) {
+      if (isInvalidUploadPartsError(err)) {
+        throw new InvalidUploadPartsException();
+      }
+      throw err;
+    }
   }
 
   async headObject(key: string): Promise<number> {

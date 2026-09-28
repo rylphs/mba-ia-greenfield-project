@@ -1,4 +1,5 @@
 import { S3Client } from '@aws-sdk/client-s3';
+import { Queue } from 'bullmq';
 import { DataSource, Repository } from 'typeorm';
 import { RefreshToken } from '../auth/entities/refresh-token.entity';
 import { VerificationToken } from '../auth/entities/verification-token.entity';
@@ -6,12 +7,16 @@ import { Channel } from '../channels/entities/channel.entity';
 import { ChannelsService } from '../channels/channels.service';
 import { StorageService } from '../storage/storage.service';
 import {
+  PROCESS_VIDEO_JOB,
+  VIDEO_PROCESSING_QUEUE,
+} from '../queue/queue.constants';
+import {
   cleanAllTables,
   createTestDataSource,
 } from '../test/create-test-data-source';
 import { requestViaInternalNetwork } from '../test/minio';
 import { User } from '../users/entities/user.entity';
-import { Video } from './entities/video.entity';
+import { Video, VideoProcessingStatus } from './entities/video.entity';
 import { VideosService } from './videos.service';
 
 const ALL_ENTITIES = [User, Channel, RefreshToken, VerificationToken, Video];
@@ -20,6 +25,11 @@ const uploadCfg = {
   maxVideoSizeBytes: 10737418240,
   partSizeBytes: 67108864,
 };
+
+// Stub args for VideosService's video-processing dependencies, for describe
+// blocks that don't exercise completeUpload and never touch the queue.
+const NOOP_VIDEO_PROCESSING_CFG = { attempts: 3, backoffDelayMs: 1000 } as any;
+const NOOP_QUEUE = { add: jest.fn() } as any;
 
 const storageCfg = {
   endpoint: process.env.S3_ENDPOINT!,
@@ -69,6 +79,8 @@ describe('VideosService.createUpload (integration)', () => {
       channelsService,
       storageService,
       uploadCfg as any,
+      NOOP_VIDEO_PROCESSING_CFG,
+      NOOP_QUEUE,
     );
   });
 
@@ -155,6 +167,8 @@ describe('VideosService.presignParts (integration)', () => {
       channelsService,
       storageService,
       uploadCfg as any,
+      NOOP_VIDEO_PROCESSING_CFG,
+      NOOP_QUEUE,
     );
   });
 
@@ -230,6 +244,8 @@ describe('VideosService.listUploadedParts (integration)', () => {
       channelsService,
       storageService,
       uploadCfg as any,
+      NOOP_VIDEO_PROCESSING_CFG,
+      NOOP_QUEUE,
     );
   });
 
@@ -291,5 +307,214 @@ describe('VideosService.listUploadedParts (integration)', () => {
       expect(part.etag).toBeTruthy();
       expect(part.size).toBe(Buffer.from('hello world').length);
     }
+  }, 30000);
+});
+
+type CompleteUploadFixture = {
+  dataSource: DataSource;
+  videoRepository: Repository<Video>;
+  storageService: StorageService;
+  queue: Queue;
+  videosService: VideosService;
+  createUserWithChannel: () => Promise<{ userId: string }>;
+  uploadSinglePart: (
+    userId: string,
+    fileSize: number,
+    body: Buffer,
+  ) => Promise<{ videoId: string; etag: string }>;
+};
+
+async function buildCompleteUploadFixture(
+  uploadCfgOverride: { maxVideoSizeBytes: number; partSizeBytes: number },
+  emailPrefix: string,
+): Promise<CompleteUploadFixture> {
+  const dataSource = createTestDataSource(ALL_ENTITIES);
+  await dataSource.initialize();
+  const userRepository = dataSource.getRepository(User);
+  const videoRepository = dataSource.getRepository(Video);
+  const channelsService = new ChannelsService(dataSource);
+
+  const storageService = new StorageService(
+    buildS3Client(storageCfg.endpoint),
+    buildS3Client(storageCfg.publicEndpoint),
+    storageCfg as any,
+  );
+
+  const queue = new Queue(VIDEO_PROCESSING_QUEUE, {
+    connection: {
+      host: process.env.REDIS_HOST || 'localhost',
+      port: parseInt(process.env.REDIS_PORT || '6379', 10),
+    },
+  });
+
+  const videosService = new VideosService(
+    videoRepository,
+    channelsService,
+    storageService,
+    uploadCfgOverride as any,
+    { attempts: 3, backoffDelayMs: 1000 } as any,
+    queue,
+  );
+
+  let userCounter = 0;
+  async function createUserWithChannel(): Promise<{ userId: string }> {
+    const email = `${emailPrefix}_${++userCounter}@example.com`;
+    const user = await userRepository.save(
+      userRepository.create({ email, password: 'hashed' }),
+    );
+    await channelsService.createChannel(user.id, email);
+    return { userId: user.id };
+  }
+
+  async function uploadSinglePart(
+    userId: string,
+    fileSize: number,
+    body: Buffer,
+  ): Promise<{ videoId: string; etag: string }> {
+    const upload = await videosService.createUpload(userId, {
+      fileName: 'ferias.mp4',
+      fileSize,
+      contentType: 'video/mp4',
+    });
+    const presigned = await videosService.presignParts(
+      upload.videoId,
+      userId,
+      [1],
+    );
+    const res = await requestViaInternalNetwork(presigned.parts[0].url, {
+      method: 'PUT',
+      body,
+    });
+    expect(res.status).toBe(200);
+    return { videoId: upload.videoId, etag: res.headers.etag as string };
+  }
+
+  return {
+    dataSource,
+    videoRepository,
+    storageService,
+    queue,
+    videosService,
+    createUserWithChannel,
+    uploadSinglePart,
+  };
+}
+
+async function teardownCompleteUploadFixture(
+  fx: CompleteUploadFixture,
+): Promise<void> {
+  await Promise.all([fx.queue.close(), fx.dataSource.destroy()]);
+}
+
+async function resetCompleteUploadFixture(
+  fx: CompleteUploadFixture,
+): Promise<void> {
+  await Promise.all([
+    cleanAllTables(fx.dataSource),
+    fx.queue.obliterate({ force: true }),
+  ]);
+}
+
+describe('VideosService.completeUpload (integration)', () => {
+  let fx: CompleteUploadFixture;
+
+  beforeAll(async () => {
+    fx = await buildCompleteUploadFixture(uploadCfg, 'videos_complete');
+  });
+
+  afterAll(() => teardownCompleteUploadFixture(fx));
+  beforeEach(() => resetCompleteUploadFixture(fx));
+
+  it('completes the upload, commits processing status and enqueues the job', async () => {
+    const { userId } = await fx.createUserWithChannel();
+    const body = Buffer.from('hello world');
+    const { videoId, etag } = await fx.uploadSinglePart(userId, 1024, body);
+
+    const result = await fx.videosService.completeUpload(videoId, userId, [
+      { partNumber: 1, etag },
+    ]);
+
+    expect(result).toEqual({
+      videoId,
+      slug: expect.any(String),
+      processingStatus: VideoProcessingStatus.PROCESSING,
+    });
+
+    const persisted = await fx.videoRepository.findOneBy({ id: videoId });
+    expect(persisted!.processing_status).toBe(VideoProcessingStatus.PROCESSING);
+
+    const job = await fx.queue.getJob(videoId);
+    expect(job).toBeDefined();
+    expect(job!.name).toBe(PROCESS_VIDEO_JOB);
+    expect(job!.data).toEqual({ videoId });
+
+    const size = await fx.storageService.headObject(`${videoId}/original`);
+    expect(size).toBe(body.length);
+  }, 30000);
+
+  it('rejects a second completion with INVALID_VIDEO_STATE and does not create a second job', async () => {
+    const { userId } = await fx.createUserWithChannel();
+    const body = Buffer.from('hello world');
+    const { videoId, etag } = await fx.uploadSinglePart(userId, 1024, body);
+
+    await fx.videosService.completeUpload(videoId, userId, [
+      { partNumber: 1, etag },
+    ]);
+
+    await expect(
+      fx.videosService.completeUpload(videoId, userId, [
+        { partNumber: 1, etag },
+      ]),
+    ).rejects.toMatchObject({ errorCode: 'INVALID_VIDEO_STATE' });
+
+    const jobCounts = await fx.queue.getJobCountByTypes(
+      'active',
+      'waiting',
+      'delayed',
+      'completed',
+    );
+    expect(jobCounts).toBe(1);
+  }, 30000);
+});
+
+describe('VideosService.completeUpload — real size over the limit (integration)', () => {
+  const smallUploadCfg = { maxVideoSizeBytes: 1024, partSizeBytes: 67108864 };
+  let fx: CompleteUploadFixture;
+
+  beforeAll(async () => {
+    fx = await buildCompleteUploadFixture(
+      smallUploadCfg,
+      'videos_complete_toolarge',
+    );
+  });
+
+  afterAll(() => teardownCompleteUploadFixture(fx));
+  beforeEach(() => resetCompleteUploadFixture(fx));
+
+  it('deletes the object, marks the video failed and enqueues no job when real size exceeds the limit', async () => {
+    const { userId } = await fx.createUserWithChannel();
+    // fileSize passes the declared-size check at creation; the real PUT body is larger.
+    const { videoId, etag } = await fx.uploadSinglePart(
+      userId,
+      1000,
+      Buffer.alloc(2048, 'x'),
+    );
+
+    await expect(
+      fx.videosService.completeUpload(videoId, userId, [
+        { partNumber: 1, etag },
+      ]),
+    ).rejects.toMatchObject({ errorCode: 'VIDEO_TOO_LARGE' });
+
+    await expect(
+      fx.storageService.headObject(`${videoId}/original`),
+    ).rejects.toThrow();
+
+    const persisted = await fx.videoRepository.findOneBy({ id: videoId });
+    expect(persisted!.processing_status).toBe(VideoProcessingStatus.FAILED);
+    expect(persisted!.processing_error).toBeTruthy();
+
+    const job = await fx.queue.getJob(videoId);
+    expect(job).toBeUndefined();
   }, 30000);
 });

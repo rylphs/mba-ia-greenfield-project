@@ -6,6 +6,9 @@ import { VerificationToken } from '../auth/entities/verification-token.entity';
 import { Channel } from '../channels/entities/channel.entity';
 import storageConfig from '../config/storage.config';
 import uploadConfig from '../config/upload.config';
+import videoProcessingConfig from '../config/video-processing.config';
+import queueConfig from '../config/queue.config';
+import { QueueModule } from '../queue/queue.module';
 import { createTestDataSource } from '../test/create-test-data-source';
 import { User } from '../users/entities/user.entity';
 import { Video } from './entities/video.entity';
@@ -21,9 +24,15 @@ describe('VideosModule', () => {
       imports: [
         ConfigModule.forRoot({
           isGlobal: true,
-          load: [storageConfig, uploadConfig],
+          load: [
+            storageConfig,
+            uploadConfig,
+            videoProcessingConfig,
+            queueConfig,
+          ],
         }),
         TypeOrmModule.forRoot(createTestDataSource(ALL_ENTITIES).options),
+        QueueModule,
         VideosModule,
       ],
     }).compile();

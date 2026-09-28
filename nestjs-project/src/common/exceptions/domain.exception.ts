@@ -78,3 +78,13 @@ export class InvalidPartNumberException extends DomainException {
     super('INVALID_PART_NUMBER', 400, 'Part number out of range');
   }
 }
+
+export class InvalidUploadPartsException extends DomainException {
+  constructor() {
+    super(
+      'INVALID_UPLOAD_PARTS',
+      400,
+      'Uploaded parts are invalid or incomplete',
+    );
+  }
+}

@@ -1,7 +1,7 @@
 # phase-03-videos — Progress
 
 **Status:** in_progress
-**SIs:** 8/15 completed
+**SIs:** 9/15 completed
 
 ### SI-03.1 — Infra: dependências, Redis e MinIO no Compose
 - **Status:** completed
@@ -74,9 +74,14 @@
   - `ioredis` não estava no `package.json` apesar de ser peer dependency obrigatória do backend Redis padrão do `bullmq` 6.x (`bullmq-otel`/`redis` também são peers opcionais, mas `ioredis` é quem o `BullModule.forRootAsync` usa por trás dos panos ao passar `connection: { host, port }`). Sem ele, `QueueModule.spec.ts` falhava na compilação do módulo com `BullMQ could not load the optional 'ioredis' package`. Instalado via `docker compose exec nestjs-api npm install ioredis@^5.4.1` (resolveu para `^5.11.1`); não estava listado nas Technical actions da SI-03.1 nem da SI-03.8, mas é uma dependência estrutural do próprio `@nestjs/bullmq`/`bullmq` já instalados, não uma decisão de escopo.
 
 ### SI-03.9 — Endpoint POST /videos/{id}/upload/complete (conclusão + disparo do processamento)
-- **Status:** pending
-- **Tests:** —
-- **Observations:** none
+- **Status:** completed
+- **Tests:** 28 passing
+- **Observations:**
+  - Tradução dos erros S3 do `CompleteMultipartUpload` (`InvalidPart`/`InvalidPartOrder`/`NoSuchUpload` → `INVALID_UPLOAD_PARTS`) feita via `err.name` no catch de `StorageService.completeMultipartUpload` — o AWS SDK v3 não modela esses três como exceções tipadas para esse comando; eles chegam como erro genérico com `.name` igual ao `Code` XML retornado pelo S3. Não há teste automatizado desse branch específico com o MinIO real porque não achei uma forma determinística de provocar `InvalidPart`/`InvalidPartOrder`/`NoSuchUpload` reais no MinIO a partir de um teste (o e2e usa um ETag divergente, que o MinIO já rejeita como `InvalidPart` de fato — então o caminho real É exercitado, mas não os outros dois códigos).
+  - `videos.module.spec.ts` e `videos.service.spec.ts`/`videos.service.integration-spec.ts` (describes de `createUpload`/`presignParts`/`listUploadedParts`) precisaram de ajuste colateral: a assinatura do construtor de `VideosService` ganhou 2 parâmetros novos (`videoProcessingCfg`, `queue`). Adicionei stubs (`{ attempts, backoffDelayMs } as any` / `{ add: jest.fn() } as any`) nos 5 call-sites que não exercitam `completeUpload`, e registrei `videoProcessingConfig`/`queueConfig` + `QueueModule` no `videos.module.spec.ts` (sem isso o teste de compilação do módulo quebrava, já que `BullModule.registerQueue` exige um `forRootAsync` em algum módulo da árvore).
+  - Ordem commit-antes-de-enfileirar garantida com duas chamadas sequenciais simples (`videoRepo.update` seguido de `queue.add`) — sem transação explícita envolvendo o `queue.add`, já que BullMQ/Redis não participa da transação Postgres; o `update` é uma escrita autônoma que já commita antes do enqueue, como o plano exige.
+  - `processing_error` no caminho `VIDEO_TOO_LARGE` foi escrito com uma mensagem descritiva (`Uploaded size X exceeds the maximum allowed size Y`) — o plano/Error Catalog não fixam o texto exato desse campo (só que deve estar preenchido), então usei algo diagnosticável.
+  - `/simplify`: estreitei o guard de `isInvalidUploadPartsError` de `err instanceof Error` para `err instanceof S3ServiceException` (import de `@aws-sdk/client-s3`), evitando que um erro não relacionado que por acaso tenha `.name` igual a um desses três códigos seja mal classificado como `INVALID_UPLOAD_PARTS`; paralelizei `deleteObject`+`videoRepo.update` no branch `VIDEO_TOO_LARGE` (I/O independente) e `cleanAllTables`+`queue.obliterate` / `queue.close`+`dataSource.destroy` nos `beforeEach`/`afterAll` dos testes de integração e e2e via `Promise.all`; troquei strings literais (`'process'`/`'processing'`/`'awaiting_upload'`/`'failed'`) no e2e por `PROCESS_VIDEO_JOB`/`VideoProcessingStatus`, já usados dessa forma no integration-spec irmão; extraí stubs compartilhados (`NOOP_VIDEO_PROCESSING_CFG`/`NOOP_QUEUE`) para os 5 call-sites de `VideosService` que não exercitam `completeUpload`; e consolidei os dois blocos `describe` quase idênticos de `completeUpload` (feliz + tamanho-excedido) em cada um dos 3 arquivos de teste atrás de uma fábrica de fixture única (`buildCompleteUploadFixture`/`bootstrapApp`), removendo a duplicação de `beforeAll`/`afterAll`/`beforeEach`. Não apliquei a sugestão de Reuse de fazer `CompleteUploadResponseDto` reusar campos de `CreateVideoUploadResponseDto` via `Pick<>` — contradiz a regra do projeto de DTOs separados por operação (acoplaria dois endpoints independentes por um ganho cosmético de 2 campos). Reexecutei as 28 tests dos 4 arquivos após o refactor — todas passando, sem regressão.
 
 ### SI-03.10 — FfmpegService (ffprobe + extração de thumbnail)
 - **Status:** pending

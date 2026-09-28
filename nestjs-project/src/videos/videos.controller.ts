@@ -23,6 +23,8 @@ import { CreateVideoUploadResponseDto } from './dto/create-video-upload-response
 import { PresignPartsDto } from './dto/presign-parts.dto';
 import { PresignPartsResponseDto } from './dto/presign-parts-response.dto';
 import { UploadedPartsResponseDto } from './dto/uploaded-parts-response.dto';
+import { CompleteUploadDto } from './dto/complete-upload.dto';
+import { CompleteUploadResponseDto } from './dto/complete-upload-response.dto';
 import { VideosService } from './videos.service';
 
 @ApiTags('videos')
@@ -173,5 +175,52 @@ export class VideosController {
     @Param('id', ParseUUIDPipe) id: string,
   ): Promise<UploadedPartsResponseDto> {
     return this.videosService.listUploadedParts(id, user.sub);
+  }
+
+  @Post(':id/upload/complete')
+  @HttpCode(HttpStatus.ACCEPTED)
+  @ApiBearerAuth('access-token')
+  @ApiOperation({
+    summary: 'Complete a video upload',
+    description:
+      'Finishes the multipart upload, verifies the real uploaded size and, on success, moves the video to processing and enqueues the processing job.',
+  })
+  @ApiResponse({
+    status: 202,
+    description: 'Upload completed, processing started',
+    schema: {
+      properties: {
+        videoId: { type: 'string', format: 'uuid' },
+        slug: { type: 'string' },
+        processingStatus: { type: 'string', enum: ['processing'] },
+      },
+    },
+  })
+  @ApiResponse({
+    status: 400,
+    description: 'INVALID_UPLOAD_PARTS, VIDEO_TOO_LARGE or VALIDATION_ERROR',
+    schema: { $ref: getSchemaPath(ApiErrorEnvelope) },
+  })
+  @ApiResponse({
+    status: 401,
+    description: 'Missing or invalid access token',
+    schema: { $ref: getSchemaPath(ApiErrorEnvelope) },
+  })
+  @ApiResponse({
+    status: 404,
+    description: 'VIDEO_NOT_FOUND',
+    schema: { $ref: getSchemaPath(ApiErrorEnvelope) },
+  })
+  @ApiResponse({
+    status: 409,
+    description: 'INVALID_VIDEO_STATE',
+    schema: { $ref: getSchemaPath(ApiErrorEnvelope) },
+  })
+  async completeUpload(
+    @CurrentUser() user: JwtPayload,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: CompleteUploadDto,
+  ): Promise<CompleteUploadResponseDto> {
+    return this.videosService.completeUpload(id, user.sub, dto.parts);
   }
 }

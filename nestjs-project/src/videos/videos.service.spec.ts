@@ -11,6 +11,11 @@ function uniqueViolationError(column: string): QueryFailedError {
   return err;
 }
 
+// Stub args for VideosService's video-processing dependencies, for describe
+// blocks that don't exercise completeUpload and never touch the queue.
+const NOOP_VIDEO_PROCESSING_CFG = { attempts: 3, backoffDelayMs: 1000 } as any;
+const NOOP_QUEUE = { add: jest.fn() } as any;
+
 describe('VideosService.createUpload', () => {
   const uploadCfg = {
     maxVideoSizeBytes: 10737418240,
@@ -49,6 +54,8 @@ describe('VideosService.createUpload', () => {
       channelsService as unknown as ChannelsService,
       storageService as unknown as StorageService,
       uploadCfg as any,
+      NOOP_VIDEO_PROCESSING_CFG,
+      NOOP_QUEUE,
     );
   });
 
@@ -180,6 +187,8 @@ describe('VideosService.presignParts', () => {
       {} as unknown as ChannelsService,
       storageService as unknown as StorageService,
       uploadCfg as any,
+      NOOP_VIDEO_PROCESSING_CFG,
+      NOOP_QUEUE,
     );
   });
 
@@ -232,5 +241,147 @@ describe('VideosService.presignParts', () => {
       2,
       uploadCfg.uploadUrlExpiresSeconds,
     );
+  });
+});
+
+describe('VideosService.completeUpload', () => {
+  const uploadCfg = { maxVideoSizeBytes: 1000, partSizeBytes: 67108864 };
+  const videoProcessingCfg = { attempts: 3, backoffDelayMs: 1000 };
+  const baseVideo = {
+    id: 'video-1',
+    slug: 'abc123xyz00',
+    channel_id: 'channel-1',
+    upload_id: 'upload-id-1',
+    processing_status: VideoProcessingStatus.AWAITING_UPLOAD,
+  };
+  const parts = [{ partNumber: 1, etag: '"etag-1"' }];
+
+  let storageService: {
+    completeMultipartUpload: jest.Mock;
+    headObject: jest.Mock;
+    deleteObject: jest.Mock;
+  };
+  let queryBuilder: {
+    innerJoin: jest.Mock;
+    where: jest.Mock;
+    getOne: jest.Mock;
+  };
+  let videoRepo: {
+    manager: object;
+    createQueryBuilder: jest.Mock;
+    update: jest.Mock;
+  };
+  let queue: { add: jest.Mock };
+  let service: VideosService;
+
+  beforeEach(() => {
+    storageService = {
+      completeMultipartUpload: jest.fn().mockResolvedValue(undefined),
+      headObject: jest.fn().mockResolvedValue(500),
+      deleteObject: jest.fn().mockResolvedValue(undefined),
+    };
+    queryBuilder = {
+      innerJoin: jest.fn().mockReturnThis(),
+      where: jest.fn().mockReturnThis(),
+      getOne: jest.fn().mockResolvedValue({ ...baseVideo }),
+    };
+    videoRepo = {
+      manager: {},
+      createQueryBuilder: jest.fn().mockReturnValue(queryBuilder),
+      update: jest.fn().mockResolvedValue(undefined),
+    };
+    queue = { add: jest.fn().mockResolvedValue(undefined) };
+
+    service = new VideosService(
+      videoRepo as any,
+      {} as unknown as ChannelsService,
+      storageService as unknown as StorageService,
+      uploadCfg as any,
+      videoProcessingCfg as any,
+      queue as any,
+    );
+  });
+
+  it('commits processing_status before enqueuing the job', async () => {
+    const callOrder: string[] = [];
+    videoRepo.update.mockImplementation(async () => {
+      callOrder.push('update');
+    });
+    queue.add.mockImplementation(async () => {
+      callOrder.push('add');
+    });
+
+    await service.completeUpload('video-1', 'user-1', parts);
+
+    expect(callOrder).toEqual(['update', 'add']);
+    expect(videoRepo.update).toHaveBeenCalledWith('video-1', {
+      processing_status: VideoProcessingStatus.PROCESSING,
+    });
+  });
+
+  it('enqueues the job with jobId, attempts and exponential backoff', async () => {
+    await service.completeUpload('video-1', 'user-1', parts);
+
+    expect(queue.add).toHaveBeenCalledWith(
+      'process',
+      { videoId: 'video-1' },
+      {
+        jobId: 'video-1',
+        attempts: videoProcessingCfg.attempts,
+        backoff: {
+          type: 'exponential',
+          delay: videoProcessingCfg.backoffDelayMs,
+        },
+      },
+    );
+  });
+
+  it('throws VIDEO_TOO_LARGE, deletes the object and marks the video failed when real size exceeds the max', async () => {
+    storageService.headObject.mockResolvedValue(
+      uploadCfg.maxVideoSizeBytes + 1,
+    );
+
+    await expect(
+      service.completeUpload('video-1', 'user-1', parts),
+    ).rejects.toMatchObject({ errorCode: 'VIDEO_TOO_LARGE' });
+
+    expect(storageService.deleteObject).toHaveBeenCalledWith(
+      'video-1/original',
+    );
+    expect(videoRepo.update).toHaveBeenCalledWith(
+      'video-1',
+      expect.objectContaining({
+        processing_status: VideoProcessingStatus.FAILED,
+        processing_error: expect.any(String),
+      }),
+    );
+    expect(queue.add).not.toHaveBeenCalled();
+  });
+
+  it('propagates INVALID_UPLOAD_PARTS from storage and does not enqueue', async () => {
+    storageService.completeMultipartUpload.mockRejectedValue(
+      Object.assign(new Error('Invalid part'), {
+        errorCode: 'INVALID_UPLOAD_PARTS',
+      }),
+    );
+
+    await expect(
+      service.completeUpload('video-1', 'user-1', parts),
+    ).rejects.toMatchObject({ errorCode: 'INVALID_UPLOAD_PARTS' });
+
+    expect(videoRepo.update).not.toHaveBeenCalled();
+    expect(queue.add).not.toHaveBeenCalled();
+  });
+
+  it('throws INVALID_VIDEO_STATE when the video is not awaiting upload', async () => {
+    queryBuilder.getOne.mockResolvedValue({
+      ...baseVideo,
+      processing_status: VideoProcessingStatus.PROCESSING,
+    });
+
+    await expect(
+      service.completeUpload('video-1', 'user-1', parts),
+    ).rejects.toMatchObject({ errorCode: 'INVALID_VIDEO_STATE' });
+    expect(queue.add).not.toHaveBeenCalled();
   });
 });

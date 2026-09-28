@@ -1,6 +1,8 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
+import { InjectQueue } from '@nestjs/bullmq';
 import type { ConfigType } from '@nestjs/config';
+import type { Queue } from 'bullmq';
 import { Repository } from 'typeorm';
 import {
   InvalidPartNumberException,
@@ -14,11 +16,19 @@ import { ChannelsService } from '../channels/channels.service';
 import { StorageService } from '../storage/storage.service';
 import { videoObjectKey } from '../storage/storage-keys';
 import uploadConfig from '../config/upload.config';
+import videoProcessingConfig from '../config/video-processing.config';
+import {
+  PROCESS_VIDEO_JOB,
+  VIDEO_PROCESSING_QUEUE,
+  type VideoProcessingJobData,
+} from '../queue/queue.constants';
 import { Video, VideoProcessingStatus } from './entities/video.entity';
 import { CreateVideoUploadDto } from './dto/create-video-upload.dto';
 import { CreateVideoUploadResponseDto } from './dto/create-video-upload-response.dto';
 import { PresignPartsResponseDto } from './dto/presign-parts-response.dto';
 import { UploadedPartsResponseDto } from './dto/uploaded-parts-response.dto';
+import { CompleteUploadPartDto } from './dto/complete-upload.dto';
+import { CompleteUploadResponseDto } from './dto/complete-upload-response.dto';
 import { generateVideoSlug } from './video-slug';
 
 const SLUG_COLUMN = 'slug';
@@ -38,6 +48,12 @@ export class VideosService {
     private readonly storageService: StorageService,
     @Inject(uploadConfig.KEY)
     private readonly uploadCfg: ConfigType<typeof uploadConfig>,
+    @Inject(videoProcessingConfig.KEY)
+    private readonly videoProcessingCfg: ConfigType<
+      typeof videoProcessingConfig
+    >,
+    @InjectQueue(VIDEO_PROCESSING_QUEUE)
+    private readonly videoProcessingQueue: Queue<VideoProcessingJobData>,
   ) {}
 
   async createUpload(
@@ -195,6 +211,62 @@ export class VideosService {
       parts,
       partSize: video.upload_part_size_bytes,
       partCount: video.upload_part_count,
+    };
+  }
+
+  async completeUpload(
+    videoId: string,
+    userId: string,
+    parts: CompleteUploadPartDto[],
+  ): Promise<CompleteUploadResponseDto> {
+    const video = await this.findOwnedById(videoId, userId);
+    this.assertAwaitingUpload(video);
+
+    const key = videoObjectKey(video.id);
+
+    await this.storageService.completeMultipartUpload(
+      key,
+      video.upload_id,
+      parts.map((part) => ({
+        PartNumber: part.partNumber,
+        ETag: part.etag,
+      })),
+    );
+
+    const contentLength = await this.storageService.headObject(key);
+
+    if (contentLength > this.uploadCfg.maxVideoSizeBytes) {
+      await Promise.all([
+        this.storageService.deleteObject(key),
+        this.videoRepo.update(video.id, {
+          processing_status: VideoProcessingStatus.FAILED,
+          processing_error: `Uploaded size ${contentLength} exceeds the maximum allowed size ${this.uploadCfg.maxVideoSizeBytes}`,
+        }),
+      ]);
+      throw new VideoTooLargeException();
+    }
+
+    await this.videoRepo.update(video.id, {
+      processing_status: VideoProcessingStatus.PROCESSING,
+    });
+
+    await this.videoProcessingQueue.add(
+      PROCESS_VIDEO_JOB,
+      { videoId: video.id },
+      {
+        jobId: video.id,
+        attempts: this.videoProcessingCfg.attempts,
+        backoff: {
+          type: 'exponential',
+          delay: this.videoProcessingCfg.backoffDelayMs,
+        },
+      },
+    );
+
+    return {
+      videoId: video.id,
+      slug: video.slug,
+      processingStatus: VideoProcessingStatus.PROCESSING,
     };
   }
 }
