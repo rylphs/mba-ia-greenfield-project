@@ -43,6 +43,10 @@ Services:
 - `nestjs-api` — NestJS API, port `3000`
 - `video-worker` — video processing worker (ffprobe/ffmpeg via BullMQ), no HTTP port, same codebase/image as `nestjs-api` (entrypoint `src/worker.ts` instead of `src/main.ts`), scalable independently with `--scale video-worker=N`
 - `db` — PostgreSQL 17, port `5432`, database `streamtube`, user/password `streamtube`
+- `mailpit` — SMTP capture, SMTP port `1025`, web UI port `8025`
+- `redis` — Redis 7.4, port `6379`, BullMQ backend (`--maxmemory-policy noeviction`, AOF enabled)
+- `minio` — S3-compatible object storage (Chainguard MinIO image pinned by digest), API port `9000`, console port `9001`
+- `minio-init` — one-shot job that creates the `videos` and `thumbnails` buckets and grants anonymous `GetObject` on `thumbnails`; must end `Exited (0)`
 
 All verification and teardown commands run on the **host machine**:
 
@@ -157,6 +161,12 @@ NestJS with standard module structure. Source lives in `src/`, compiled output i
 
 - Each domain feature gets its own module (e.g., `UsersModule`, `VideosModule`) registered in `AppModule`
 - Controllers handle HTTP routing; Services hold business logic; both are scoped to their module
+- Two entrypoints share the codebase: `src/main.ts` boots `AppModule` (HTTP API) and `src/worker.ts` boots `WorkerModule` as a standalone application context (no HTTP listener, no controllers/guards). Config and the DB connection come from `AppConfigModule` and `DatabaseModule`, which both root modules import
+
+## Testing notes
+
+- Storage, queue and FFmpeg are exercised for real against the Compose `minio`, `redis` and the installed `ffmpeg`. Test videos are generated on the fly with `ffmpeg -f lavfi`.
+- `S3_PUBLIC_ENDPOINT` (`localhost:9000`) is not reachable from inside a container. To `PUT`/`GET` a presigned URL in a test, use `requestViaInternalNetwork` (`src/test/minio.ts`), which connects to `minio:9000` but keeps the signed `Host` header.
 
 ## Code Conventions
 
