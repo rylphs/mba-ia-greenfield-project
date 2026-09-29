@@ -118,7 +118,11 @@ _Inherited constraints (not reopened):_ PostgreSQL 17 + TypeORM 0.3.28 (Phase 01
 
 **Recommendation:** **Option A (MinIO from `quay.io`, pinned)**. It keeps the product the plan and challenge specify, pinned for reproducibility, and it covers every S3 feature the other TDs rely on. The archive risk is limited to dev/test, because the code talks only to the S3 API through `@aws-sdk/client-s3` and never imports a MinIO SDK. Moving to Option C later is a Compose-only change.
 
-**Decision:** A
+**Decision:** B
+
+**Revisions:**
+
+- 2026-09-29 — Decisão alterada de A para B: `cgr.dev/chainguard/minio:latest-dev` e `cgr.dev/chainguard/minio-client:latest-dev`, pinados por digest (servidor `RELEASE.2026-09-22T19-25-18Z`). A variante `-dev` é necessária pelo `sh`/`wget` usados no healthcheck do `minio` e no script do `minio-init`. _Rationale:_ na SI-03.1 (2026-09-24), `quay.io/minio/minio` e `quay.io/minio/mc` passaram a devolver `unauthorized` no pull anônimo, e `minio/minio` não existe mais no Docker Hub; a Option A deixou de ser executável. O pin por digest resolve o contra da Option B ("free tier só publica `latest` flutuante"): a reprodutibilidade vem do digest, não da tag. Risco residual: o free tier da Chainguard não documenta retenção de digests antigos (em 2026-09-29, digests construídos desde 2025-10-30 ainda resolviam). Se o digest pinado deixar de resolver, o fallback é `pgsty/silo` + `pgsty/mc` (fork comunitário do MinIO com tags `RELEASE.*` pináveis, compatível com os `MINIO_*` do projeto), trocando só o Compose (imagens e healthcheck `wget`→`curl`). Troca de letra registrada in-place, e não como Supersede, por decisão do usuário.
 
 ---
 
@@ -477,7 +481,7 @@ _Inherited constraints (not reopened):_ PostgreSQL 17 + TypeORM 0.3.28 (Phase 01
 |----|-------|----------|---------------|--------|
 | TD-01 | Backend | Queue technology | A — BullMQ 6 + Redis via `@nestjs/bullmq` 11.x (CJS) | A |
 | TD-02 | Backend | Worker runtime topology | A — same codebase, second entrypoint, separate Compose service | A |
-| TD-03 | Repo-wide | Object storage runtime image | A — MinIO from `quay.io`, pinned last community release | A |
+| TD-03 | Repo-wide | Object storage runtime image | A — MinIO from `quay.io`, pinned last community release | B (revised 2026-09-29 — Chainguard MinIO `-dev`, pinned by digest) |
 | TD-04 | Backend | Storage layout (buckets/keys/thumbnails) | B — private `videos` + public-read `thumbnails` | B |
 | TD-05 | Cross-layer | Presigned URL host resolution in Docker | A — internal `S3_ENDPOINT` + client-facing `S3_PUBLIC_ENDPOINT` | A |
 | TD-06 | Cross-layer | Upload protocol for 10 GB | A — S3 multipart with presigned part URLs | A |

@@ -47,7 +47,7 @@ sources_mtime:
 |-----|--------|-------|-------|--------|----------|-----------|
 | phase-03-videos/TD-01 | phase | Backend | Queue Technology (Message Queue) | decided | A | `@nestjs/bullmq@^11.0.5`, `bullmq@^6.3.8` |
 | phase-03-videos/TD-02 | phase | Backend | Video Worker Runtime Topology | decided | A | — |
-| phase-03-videos/TD-03 | phase | Repo-wide | Object Storage Runtime Image (local S3-compatible service) | decided | A | — |
+| phase-03-videos/TD-03 | phase | Repo-wide | Object Storage Runtime Image (local S3-compatible service) | decided | B | — |
 | phase-03-videos/TD-04 | phase | Backend | Storage Layout — Buckets, Object Keys and Thumbnail Exposure | decided | B | — |
 | phase-03-videos/TD-05 | phase | Cross-layer | Presigned URL Host Resolution Under Docker Networking | decided | A | `@aws-sdk/client-s3@^3.1138.0`, `@aws-sdk/s3-request-presigner@^3.1138.0` |
 | phase-03-videos/TD-06 | phase | Cross-layer | Upload Protocol for Files up to 10 GB | decided | A | `@aws-sdk/client-s3@^3.1138.0`, `@aws-sdk/s3-request-presigner@^3.1138.0` |
@@ -97,6 +97,9 @@ _Source files:_
 
 **Recommendation:** It keeps the product the plan and challenge specify, pinned for reproducibility, and it covers every S3 feature the other TDs rely on. The archive risk is limited to dev/test, because the code talks only to the S3 API through `@aws-sdk/client-s3` and never imports a MinIO SDK. Moving to Option C later is a Compose-only change.
 **Libraries:** —
+
+**Revisions:**
+- 2026-09-29 — Decisão alterada de A para B: `cgr.dev/chainguard/minio:latest-dev` e `cgr.dev/chainguard/minio-client:latest-dev`, pinados por digest (servidor `RELEASE.2026-09-22T19-25-18Z`). _Rationale:_ `quay.io/minio/*` passou a devolver `unauthorized` no pull e `minio/minio` não existe mais no Docker Hub; o pin por digest resolve o contra "`latest` flutuante" da Option B. Fallback se o digest deixar de resolver: `pgsty/silo` + `pgsty/mc`, trocando só o Compose.
 
 ### phase-03-videos/TD-04
 

@@ -121,7 +121,7 @@ _None._ _(UI not in scope — `## UI Inventory` absent from context.md.)_
 - **AMB-3** _(resolved_by deferred_capability)_ — Fatia backend-only; superfícies de UI (upload, streaming, download) registradas como `deferred` em `## Non-UI / Deferred Capabilities` do context.md.
 - **OQ-1** _(resolved_by phase-03-videos/TD-01)_ — TD-01 pending — Queue Technology (Message Queue). Decision: A (BullMQ + Redis via @nestjs/bullmq 11.x).
 - **OQ-2** _(resolved_by phase-03-videos/TD-02)_ — TD-02 pending — Video Worker Runtime Topology. Decision: A (mesmo codebase, 2º entrypoint, serviço Compose).
-- **OQ-3** _(resolved_by phase-03-videos/TD-03)_ — TD-03 pending — Object Storage Runtime Image (local S3-compatible service). Decision: A (MinIO quay.io pinado).
+- **OQ-3** _(resolved_by phase-03-videos/TD-03)_ — TD-03 pending — Object Storage Runtime Image (local S3-compatible service). Decision: A (MinIO quay.io pinado). Revisada em 2026-09-29 para B (Chainguard MinIO `-dev`, pinado por digest) — quay.io deixou de permitir pull anônimo; ver Revisions da TD-03.
 - **OQ-4** _(resolved_by phase-03-videos/TD-04)_ — TD-04 pending — Storage Layout: buckets, object keys, thumbnail exposure. Decision: B (bucket privado `videos` + público `thumbnails`).
 - **OQ-5** _(resolved_by phase-03-videos/TD-05)_ — TD-05 pending — Presigned URL Host Resolution Under Docker Networking. Decision: A (dois clientes S3: interno + público).
 - **OQ-6** _(resolved_by phase-03-videos/TD-06)_ — TD-06 pending — Upload Protocol for Files up to 10 GB. Decision: A (S3 multipart com part URLs pré-assinadas).
