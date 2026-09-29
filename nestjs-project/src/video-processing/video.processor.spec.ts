@@ -1,16 +1,18 @@
+import type { Job } from 'bullmq';
 import { UnrecoverableError } from 'bullmq';
+import type { VideoProcessingJobData } from '../queue/queue.constants';
 import { VideoProcessor } from './video.processor';
 
 function fakeJob(overrides: {
   videoId: string;
   attemptsMade: number;
   attempts: number;
-}): any {
+}): Job<VideoProcessingJobData> {
   return {
     data: { videoId: overrides.videoId },
     attemptsMade: overrides.attemptsMade,
     opts: { attempts: overrides.attempts },
-  };
+  } as Job<VideoProcessingJobData>;
 }
 
 describe('VideoProcessor', () => {

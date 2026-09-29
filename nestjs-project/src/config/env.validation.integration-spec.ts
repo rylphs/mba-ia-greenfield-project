@@ -1,6 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as dotenv from 'dotenv';
+import type { ValidationError } from 'joi';
 import { envValidationSchema } from './env.validation';
 
 const requiredEnv = {
@@ -15,11 +16,18 @@ const requiredEnv = {
   S3_SECRET_ACCESS_KEY: 'streamtube-secret',
 };
 
-const validate = (env: Record<string, string | undefined>) =>
-  envValidationSchema.validate(
+const validate = (
+  env: Record<string, string | undefined>,
+): { error?: ValidationError; value: Record<string, unknown> } => {
+  const result = envValidationSchema.validate(
     { ...requiredEnv, ...env },
     { allowUnknown: true, abortEarly: false },
   );
+  return {
+    error: result.error,
+    value: result.value as Record<string, unknown>,
+  };
+};
 
 describe('envValidationSchema — SWAGGER_ENABLED', () => {
   it('should reject SWAGGER_ENABLED with an invalid value', () => {

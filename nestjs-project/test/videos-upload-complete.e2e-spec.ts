@@ -6,13 +6,17 @@ import request from 'supertest';
 import { App } from 'supertest/types';
 import { DataSource, Repository } from 'typeorm';
 import { AppModule } from '../src/app.module';
-import { AuthService } from '../src/auth/auth.service';
+import { MailService } from '../src/mail/mail.service';
+import { ApiErrorEnvelope } from '../src/common/openapi/api-error-envelope.dto';
 import { DomainExceptionFilter } from '../src/common/filters/domain-exception.filter';
 import { ValidationExceptionFilter } from '../src/common/filters/validation-exception.filter';
 import { StorageService } from '../src/storage/storage.service';
 import uploadConfig from '../src/config/upload.config';
 import { requestViaInternalNetwork } from '../src/test/minio';
 import { cleanAllTables } from '../src/test/create-test-data-source';
+import { CompleteUploadResponseDto } from '../src/videos/dto/complete-upload-response.dto';
+import { CreateVideoUploadResponseDto } from '../src/videos/dto/create-video-upload-response.dto';
+import { PresignPartsResponseDto } from '../src/videos/dto/presign-parts-response.dto';
 import {
   PROCESS_VIDEO_JOB,
   VIDEO_PROCESSING_QUEUE,
@@ -27,13 +31,13 @@ async function captureConfirmationToken(
   email: string,
   password = 'password123',
 ): Promise<string> {
-  const authService = app.get(AuthService);
-  const mailServiceInstance = (authService as any).mailService;
+  const mailService = app.get(MailService);
   let capturedToken = '';
   jest
-    .spyOn(mailServiceInstance, 'sendConfirmationEmail')
-    .mockImplementationOnce(async (_e: string, _n: string, t: string) => {
+    .spyOn(mailService, 'sendConfirmationEmail')
+    .mockImplementationOnce((_e: string, _n: string, t: string) => {
       capturedToken = t;
+      return Promise.resolve();
     });
   await request(app.getHttpServer())
     .post('/auth/register')
@@ -53,7 +57,7 @@ async function registerConfirmAndLogin(
   const res = await request(app.getHttpServer())
     .post('/auth/login')
     .send({ email, password });
-  return { access_token: res.body.access_token };
+  return { access_token: (res.body as { access_token: string }).access_token };
 }
 
 async function uploadSinglePart(
@@ -67,7 +71,7 @@ async function uploadSinglePart(
     .set('Authorization', `Bearer ${accessToken}`)
     .send({ fileName: 'ferias.mp4', fileSize, contentType: 'video/mp4' })
     .expect(201);
-  const videoId = createRes.body.videoId;
+  const { videoId } = createRes.body as CreateVideoUploadResponseDto;
 
   const presignRes = await request(app.getHttpServer())
     .post(`/videos/${videoId}/upload/parts`)
@@ -75,10 +79,13 @@ async function uploadSinglePart(
     .send({ partNumbers: [1] })
     .expect(200);
 
-  const putRes = await requestViaInternalNetwork(presignRes.body.parts[0].url, {
-    method: 'PUT',
-    body,
-  });
+  const putRes = await requestViaInternalNetwork(
+    (presignRes.body as PresignPartsResponseDto).parts[0].url,
+    {
+      method: 'PUT',
+      body,
+    },
+  );
   expect(putRes.status).toBe(200);
 
   return { videoId, etag: putRes.headers.etag as string };
@@ -168,9 +175,12 @@ describe('POST /videos/{id}/upload/complete (e2e)', () => {
       .send({ parts: [{ partNumber: 1, etag }] })
       .expect(202);
 
-    expect(res.body.videoId).toBe(videoId);
-    expect(res.body.slug).toEqual(expect.any(String));
-    expect(res.body.processingStatus).toBe(VideoProcessingStatus.PROCESSING);
+    const completeBody = res.body as CompleteUploadResponseDto;
+    expect(completeBody.videoId).toBe(videoId);
+    expect(completeBody.slug).toEqual(expect.any(String));
+    expect(completeBody.processingStatus).toBe(
+      VideoProcessingStatus.PROCESSING,
+    );
 
     const persisted = await videoRepository.findOneBy({ id: videoId });
     expect(persisted!.processing_status).toBe(VideoProcessingStatus.PROCESSING);
@@ -209,7 +219,7 @@ describe('POST /videos/{id}/upload/complete (e2e)', () => {
       .send({ parts: [{ partNumber: 1, etag }] })
       .expect(409);
 
-    expect(res.body.error).toBe('INVALID_VIDEO_STATE');
+    expect((res.body as ApiErrorEnvelope).error).toBe('INVALID_VIDEO_STATE');
 
     const jobCounts = await queue.getJobCountByTypes(
       'active',
@@ -245,7 +255,7 @@ describe('POST /videos/{id}/upload/complete (e2e)', () => {
       })
       .expect(400);
 
-    expect(res.body.error).toBe('INVALID_UPLOAD_PARTS');
+    expect((res.body as ApiErrorEnvelope).error).toBe('INVALID_UPLOAD_PARTS');
 
     const persisted = await videoRepository.findOneBy({ id: videoId });
     expect(persisted!.processing_status).toBe(
@@ -278,7 +288,7 @@ describe('POST /videos/{id}/upload/complete (e2e)', () => {
       .send({ parts: [{ partNumber: 1, etag }] })
       .expect(404);
 
-    expect(res.body.error).toBe('VIDEO_NOT_FOUND');
+    expect((res.body as ApiErrorEnvelope).error).toBe('VIDEO_NOT_FOUND');
 
     const job = await queue.getJob(videoId);
     expect(job).toBeUndefined();
@@ -327,7 +337,7 @@ describe('POST /videos/{id}/upload/complete — real size over the limit (e2e)',
       .send({ parts: [{ partNumber: 1, etag }] })
       .expect(400);
 
-    expect(res.body.error).toBe('VIDEO_TOO_LARGE');
+    expect((res.body as ApiErrorEnvelope).error).toBe('VIDEO_TOO_LARGE');
 
     await expect(
       storageService.headObject(`${videoId}/original`),

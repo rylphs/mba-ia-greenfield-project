@@ -6,12 +6,15 @@ import request from 'supertest';
 import { App } from 'supertest/types';
 import { DataSource, Repository } from 'typeorm';
 import { AppModule } from '../src/app.module';
-import { AuthService } from '../src/auth/auth.service';
+import { MailService } from '../src/mail/mail.service';
+import { ApiErrorEnvelope } from '../src/common/openapi/api-error-envelope.dto';
 import { DomainExceptionFilter } from '../src/common/filters/domain-exception.filter';
 import { ValidationExceptionFilter } from '../src/common/filters/validation-exception.filter';
 import { requestViaInternalNetwork } from '../src/test/minio';
 import { cleanAllTables } from '../src/test/create-test-data-source';
 import { VIDEO_PROCESSING_QUEUE } from '../src/queue/queue.constants';
+import { CreateVideoUploadResponseDto } from '../src/videos/dto/create-video-upload-response.dto';
+import { PresignPartsResponseDto } from '../src/videos/dto/presign-parts-response.dto';
 import {
   Video,
   VideoProcessingStatus,
@@ -22,13 +25,13 @@ async function captureConfirmationToken(
   email: string,
   password = 'password123',
 ): Promise<string> {
-  const authService = app.get(AuthService);
-  const mailServiceInstance = (authService as any).mailService;
+  const mailService = app.get(MailService);
   let capturedToken = '';
   jest
-    .spyOn(mailServiceInstance, 'sendConfirmationEmail')
-    .mockImplementationOnce(async (_e: string, _n: string, t: string) => {
+    .spyOn(mailService, 'sendConfirmationEmail')
+    .mockImplementationOnce((_e: string, _n: string, t: string) => {
       capturedToken = t;
+      return Promise.resolve();
     });
   await request(app.getHttpServer())
     .post('/auth/register')
@@ -48,7 +51,7 @@ async function registerConfirmAndLogin(
   const res = await request(app.getHttpServer())
     .post('/auth/login')
     .send({ email, password });
-  return { access_token: res.body.access_token };
+  return { access_token: (res.body as { access_token: string }).access_token };
 }
 
 async function uploadAndCompleteReadyVideo(
@@ -62,7 +65,7 @@ async function uploadAndCompleteReadyVideo(
     .set('Authorization', `Bearer ${accessToken}`)
     .send({ fileName, fileSize: body.length, contentType: 'video/mp4' })
     .expect(201);
-  const { videoId, slug } = createRes.body;
+  const { videoId, slug } = createRes.body as CreateVideoUploadResponseDto;
 
   const presignRes = await request(app.getHttpServer())
     .post(`/videos/${videoId}/upload/parts`)
@@ -70,10 +73,13 @@ async function uploadAndCompleteReadyVideo(
     .send({ partNumbers: [1] })
     .expect(200);
 
-  const putRes = await requestViaInternalNetwork(presignRes.body.parts[0].url, {
-    method: 'PUT',
-    body,
-  });
+  const putRes = await requestViaInternalNetwork(
+    (presignRes.body as PresignPartsResponseDto).parts[0].url,
+    {
+      method: 'PUT',
+      body,
+    },
+  );
   expect(putRes.status).toBe(200);
   const etag = putRes.headers.etag as string;
 
@@ -225,7 +231,7 @@ describe('GET /videos/{slug}/download (e2e)', () => {
       .set('Authorization', `Bearer ${access_token}`)
       .expect(409);
 
-    expect(res.body.error).toBe('VIDEO_NOT_READY');
+    expect((res.body as ApiErrorEnvelope).error).toBe('VIDEO_NOT_READY');
   }, 30000);
 
   it('nao-dono-recebe-404', async () => {
@@ -248,6 +254,6 @@ describe('GET /videos/{slug}/download (e2e)', () => {
       .set('Authorization', `Bearer ${otherToken}`)
       .expect(404);
 
-    expect(res.body.error).toBe('VIDEO_NOT_FOUND');
+    expect((res.body as ApiErrorEnvelope).error).toBe('VIDEO_NOT_FOUND');
   }, 30000);
 });

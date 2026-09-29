@@ -30,8 +30,12 @@ const uploadCfg = {
 
 // Stub args for VideosService's video-processing dependencies, for describe
 // blocks that don't exercise completeUpload and never touch the queue.
-const NOOP_VIDEO_PROCESSING_CFG = { attempts: 3, backoffDelayMs: 1000 } as any;
-const NOOP_QUEUE = { add: jest.fn() } as any;
+type VideosServiceDeps = ConstructorParameters<typeof VideosService>;
+const NOOP_VIDEO_PROCESSING_CFG = {
+  attempts: 3,
+  backoffDelayMs: 1000,
+} as VideosServiceDeps[4];
+const NOOP_QUEUE = { add: jest.fn() } as unknown as VideosServiceDeps[5];
 
 const storageCfg = {
   endpoint: process.env.S3_ENDPOINT!,
@@ -438,7 +442,7 @@ describe('VideosService.completeUpload (integration)', () => {
 
     expect(result).toEqual({
       videoId,
-      slug: expect.any(String),
+      slug: expect.any(String) as string,
       processingStatus: VideoProcessingStatus.PROCESSING,
     });
 

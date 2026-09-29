@@ -4,7 +4,8 @@ import request from 'supertest';
 import { App } from 'supertest/types';
 import { DataSource, Repository } from 'typeorm';
 import { AppModule } from '../src/app.module';
-import { AuthService } from '../src/auth/auth.service';
+import { MailService } from '../src/mail/mail.service';
+import { ApiErrorEnvelope } from '../src/common/openapi/api-error-envelope.dto';
 import { DomainExceptionFilter } from '../src/common/filters/domain-exception.filter';
 import { ValidationExceptionFilter } from '../src/common/filters/validation-exception.filter';
 import { requestViaInternalNetwork } from '../src/test/minio';
@@ -13,6 +14,9 @@ import {
   VideoProcessingStatus,
 } from '../src/videos/entities/video.entity';
 import { cleanAllTables } from '../src/test/create-test-data-source';
+import { CreateVideoUploadResponseDto } from '../src/videos/dto/create-video-upload-response.dto';
+import { PresignPartsResponseDto } from '../src/videos/dto/presign-parts-response.dto';
+import { UploadedPartsResponseDto } from '../src/videos/dto/uploaded-parts-response.dto';
 
 describe('GET /videos/{id}/upload/parts (e2e)', () => {
   let app: INestApplication<App>;
@@ -54,13 +58,13 @@ describe('GET /videos/{id}/upload/parts (e2e)', () => {
     email: string,
     password = 'password123',
   ): Promise<string> {
-    const authService = app.get(AuthService);
-    const mailServiceInstance = (authService as any).mailService;
+    const mailService = app.get(MailService);
     let capturedToken = '';
     jest
-      .spyOn(mailServiceInstance, 'sendConfirmationEmail')
-      .mockImplementationOnce(async (_e: string, _n: string, t: string) => {
+      .spyOn(mailService, 'sendConfirmationEmail')
+      .mockImplementationOnce((_e: string, _n: string, t: string) => {
         capturedToken = t;
+        return Promise.resolve();
       });
     await request(app.getHttpServer())
       .post('/auth/register')
@@ -79,7 +83,9 @@ describe('GET /videos/{id}/upload/parts (e2e)', () => {
     const res = await request(app.getHttpServer())
       .post('/auth/login')
       .send({ email, password });
-    return { access_token: res.body.access_token };
+    return {
+      access_token: (res.body as { access_token: string }).access_token,
+    };
   }
 
   async function createVideo(
@@ -95,11 +101,9 @@ describe('GET /videos/{id}/upload/parts (e2e)', () => {
       .set('Authorization', `Bearer ${accessToken}`)
       .send({ fileName: 'ferias.mp4', fileSize, contentType: 'video/mp4' })
       .expect(201);
-    return {
-      videoId: res.body.videoId,
-      partSize: res.body.partSize,
-      partCount: res.body.partCount,
-    };
+    const { videoId, partSize, partCount } =
+      res.body as CreateVideoUploadResponseDto;
+    return { videoId, partSize, partCount };
   }
 
   it('lista-vazia-antes-de-qualquer-part', async () => {
@@ -113,9 +117,10 @@ describe('GET /videos/{id}/upload/parts (e2e)', () => {
       .set('Authorization', `Bearer ${access_token}`)
       .expect(200);
 
-    expect(res.body.parts).toEqual([]);
-    expect(res.body.partSize).toBe(partSize);
-    expect(res.body.partCount).toBe(partCount);
+    const body = res.body as UploadedPartsResponseDto;
+    expect(body.parts).toEqual([]);
+    expect(body.partSize).toBe(partSize);
+    expect(body.partCount).toBe(partCount);
   }, 30000);
 
   it('lista-apenas-as-parts-enviadas', async () => {
@@ -131,8 +136,8 @@ describe('GET /videos/{id}/upload/parts (e2e)', () => {
       .expect(200);
 
     const uploads = await Promise.all(
-      presignRes.body.parts.map(
-        async ({ partNumber, url }: { partNumber: number; url: string }) => {
+      (presignRes.body as PresignPartsResponseDto).parts.map(
+        async ({ partNumber, url }) => {
           const body = Buffer.from(`part-${partNumber}`);
           const putRes = await requestViaInternalNetwork(url, {
             method: 'PUT',
@@ -141,7 +146,7 @@ describe('GET /videos/{id}/upload/parts (e2e)', () => {
           expect(putRes.status).toBe(200);
           return [
             partNumber,
-            { etag: putRes.headers.etag, size: body.length },
+            { etag: putRes.headers.etag as string, size: body.length },
           ] as const;
         },
       ),
@@ -154,11 +159,10 @@ describe('GET /videos/{id}/upload/parts (e2e)', () => {
       .set('Authorization', `Bearer ${access_token}`)
       .expect(200);
 
-    expect(res.body.parts).toHaveLength(2);
-    expect(
-      res.body.parts.map((p: { partNumber: number }) => p.partNumber),
-    ).toEqual([1, 3]);
-    for (const part of res.body.parts) {
+    const { parts } = res.body as UploadedPartsResponseDto;
+    expect(parts).toHaveLength(2);
+    expect(parts.map((p) => p.partNumber)).toEqual([1, 3]);
+    for (const part of parts) {
       expect(part.etag).toBe(uploaded[part.partNumber].etag);
       expect(part.size).toBe(uploaded[part.partNumber].size);
     }
@@ -178,7 +182,7 @@ describe('GET /videos/{id}/upload/parts (e2e)', () => {
       .set('Authorization', `Bearer ${other.access_token}`)
       .expect(404);
 
-    expect(res.body.error).toBe('VIDEO_NOT_FOUND');
+    expect((res.body as ApiErrorEnvelope).error).toBe('VIDEO_NOT_FOUND');
   });
 
   it('video-ready-recebe-409', async () => {
@@ -195,6 +199,6 @@ describe('GET /videos/{id}/upload/parts (e2e)', () => {
       .set('Authorization', `Bearer ${access_token}`)
       .expect(409);
 
-    expect(res.body.error).toBe('INVALID_VIDEO_STATE');
+    expect((res.body as ApiErrorEnvelope).error).toBe('INVALID_VIDEO_STATE');
   });
 });

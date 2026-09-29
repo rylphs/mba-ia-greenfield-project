@@ -5,16 +5,20 @@ import { VideoProcessingStatus } from './entities/video.entity';
 import { VideosService } from './videos.service';
 
 function uniqueViolationError(column: string): QueryFailedError {
-  const err = new QueryFailedError('', [], new Error('duplicate')) as any;
-  err.code = '23505';
-  err.detail = `Key (${column})=(x) already exists.`;
-  return err;
+  return Object.assign(new QueryFailedError('', [], new Error('duplicate')), {
+    code: '23505',
+    detail: `Key (${column})=(x) already exists.`,
+  });
 }
 
 // Stub args for VideosService's video-processing dependencies, for describe
 // blocks that don't exercise completeUpload and never touch the queue.
-const NOOP_VIDEO_PROCESSING_CFG = { attempts: 3, backoffDelayMs: 1000 } as any;
-const NOOP_QUEUE = { add: jest.fn() } as any;
+type VideosServiceDeps = ConstructorParameters<typeof VideosService>;
+const NOOP_VIDEO_PROCESSING_CFG = {
+  attempts: 3,
+  backoffDelayMs: 1000,
+} as VideosServiceDeps[4];
+const NOOP_QUEUE = { add: jest.fn() } as unknown as VideosServiceDeps[5];
 
 describe('VideosService.createUpload', () => {
   const uploadCfg = {
@@ -44,10 +48,18 @@ describe('VideosService.createUpload', () => {
       create: jest.fn((_entity: unknown, data: unknown) => ({
         ...(data as object),
       })),
-      save: jest.fn(async (entity: any) => ({ id: 'video-1', ...entity })),
+      save: jest.fn((entity: object) =>
+        Promise.resolve({ id: 'video-1', ...entity }),
+      ),
       update: jest.fn().mockResolvedValue(undefined),
     };
-    videoRepo = { manager: { transaction: jest.fn((cb: any) => cb(manager)) } };
+    videoRepo = {
+      manager: {
+        transaction: jest.fn((cb: (m: typeof manager) => unknown) =>
+          cb(manager),
+        ),
+      },
+    };
 
     service = new VideosService(
       videoRepo as any,
@@ -108,10 +120,9 @@ describe('VideosService.createUpload', () => {
   it('retries slug generation on a unique violation and succeeds within the retry budget', async () => {
     manager.save
       .mockRejectedValueOnce(uniqueViolationError('slug'))
-      .mockImplementationOnce(async (entity: any) => ({
-        id: 'video-1',
-        ...entity,
-      }));
+      .mockImplementationOnce((entity: object) =>
+        Promise.resolve({ id: 'video-1', ...entity }),
+      );
 
     const result = await service.createUpload('user-1', {
       fileName: 'a.mp4',
@@ -304,11 +315,13 @@ describe('VideosService.completeUpload', () => {
 
   it('commits processing_status before enqueuing the job', async () => {
     const callOrder: string[] = [];
-    videoRepo.update.mockImplementation(async () => {
+    videoRepo.update.mockImplementation(() => {
       callOrder.push('update');
+      return Promise.resolve();
     });
-    queue.add.mockImplementation(async () => {
+    queue.add.mockImplementation(() => {
       callOrder.push('add');
+      return Promise.resolve();
     });
 
     await service.completeUpload('video-1', 'user-1', parts);
@@ -352,7 +365,7 @@ describe('VideosService.completeUpload', () => {
       'video-1',
       expect.objectContaining({
         processing_status: VideoProcessingStatus.FAILED,
-        processing_error: expect.any(String),
+        processing_error: expect.any(String) as string,
       }),
     );
     expect(queue.add).not.toHaveBeenCalled();
