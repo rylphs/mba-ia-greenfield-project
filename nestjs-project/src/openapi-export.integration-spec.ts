@@ -110,6 +110,58 @@ describe('exportSpec (integration)', () => {
     }
   });
 
+  it('includes the six video operations with their documented statuses', () => {
+    const paths = document.paths as Record<
+      string,
+      Record<string, Record<string, unknown>>
+    >;
+    const VALIDATION_ERRORS = ['400', '401'];
+    const OWNERSHIP_ERRORS = ['404', '409'];
+    const expected: Array<{
+      path: string;
+      method: string;
+      statuses: string[];
+    }> = [
+      {
+        path: '/videos',
+        method: 'post',
+        statuses: ['201', ...VALIDATION_ERRORS],
+      },
+      {
+        path: '/videos/{id}/upload/parts',
+        method: 'post',
+        statuses: ['200', ...VALIDATION_ERRORS, ...OWNERSHIP_ERRORS],
+      },
+      {
+        path: '/videos/{id}/upload/parts',
+        method: 'get',
+        statuses: ['200', ...VALIDATION_ERRORS, ...OWNERSHIP_ERRORS],
+      },
+      {
+        path: '/videos/{id}/upload/complete',
+        method: 'post',
+        statuses: ['202', ...VALIDATION_ERRORS, ...OWNERSHIP_ERRORS],
+      },
+      {
+        path: '/videos/{slug}/stream',
+        method: 'get',
+        statuses: ['302', ...VALIDATION_ERRORS, ...OWNERSHIP_ERRORS],
+      },
+      {
+        path: '/videos/{slug}/download',
+        method: 'get',
+        statuses: ['302', ...VALIDATION_ERRORS, ...OWNERSHIP_ERRORS],
+      },
+    ];
+
+    for (const { path, method, statuses } of expected) {
+      const operation = paths[path]?.[method];
+      expect(operation).toBeDefined();
+      const responses = operation.responses as Record<string, unknown>;
+      expect(Object.keys(responses)).toEqual(expect.arrayContaining(statuses));
+    }
+  });
+
   it('all auth endpoints have a non-empty summary', () => {
     const paths = document.paths as Record<
       string,

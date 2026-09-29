@@ -1,0 +1,45 @@
+import { Test } from '@nestjs/testing';
+import { ConfigModule } from '@nestjs/config';
+import { TypeOrmModule } from '@nestjs/typeorm';
+import { RefreshToken } from '../auth/entities/refresh-token.entity';
+import { VerificationToken } from '../auth/entities/verification-token.entity';
+import { Channel } from '../channels/entities/channel.entity';
+import storageConfig from '../config/storage.config';
+import uploadConfig from '../config/upload.config';
+import videoProcessingConfig from '../config/video-processing.config';
+import queueConfig from '../config/queue.config';
+import { QueueModule } from '../queue/queue.module';
+import { createTestDataSource } from '../test/create-test-data-source';
+import { User } from '../users/entities/user.entity';
+import { Video } from './entities/video.entity';
+import { VideosController } from './videos.controller';
+import { VideosModule } from './videos.module';
+import { VideosService } from './videos.service';
+
+const ALL_ENTITIES = [User, Channel, RefreshToken, VerificationToken, Video];
+
+describe('VideosModule', () => {
+  it('should compile with VideosController and VideosService', async () => {
+    const module = await Test.createTestingModule({
+      imports: [
+        ConfigModule.forRoot({
+          isGlobal: true,
+          load: [
+            storageConfig,
+            uploadConfig,
+            videoProcessingConfig,
+            queueConfig,
+          ],
+        }),
+        TypeOrmModule.forRoot(createTestDataSource(ALL_ENTITIES).options),
+        QueueModule,
+        VideosModule,
+      ],
+    }).compile();
+
+    expect(module.get(VideosController)).toBeDefined();
+    expect(module.get(VideosService)).toBeDefined();
+
+    await module.close();
+  }, 30000);
+});
