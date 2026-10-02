@@ -1,9 +1,11 @@
 import { Module } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { ModulesContainer } from '@nestjs/core';
+import { ChannelsModule } from './channels/channels.module';
 import { DatabaseModule } from './database/database.module';
 import { QueueModule } from './queue/queue.module';
 import { StorageService } from './storage/storage.service';
+import { UsersModule } from './users/users.module';
 import { FfmpegService } from './video-processing/ffmpeg/ffmpeg.service';
 import { VideoProcessingModule } from './video-processing/video-processing.module';
 import { WorkerModule } from './worker.module';
@@ -27,6 +29,15 @@ class NoopQueueModule {}
 @Module({ providers: [FfmpegService], exports: [FfmpegService] })
 class NoopVideoProcessingModule {}
 
+// ChannelsModule/UsersModule are imported only to register their entities
+// with the real DataSource (covered by worker.module.integration-spec.ts);
+// their forFeature() repositories cannot resolve against the stubbed DB.
+@Module({})
+class NoopChannelsModule {}
+
+@Module({})
+class NoopUsersModule {}
+
 describe('WorkerModule', () => {
   it('compiles with FfmpegService and StorageService wired, and registers no HTTP controllers', async () => {
     const module = await Test.createTestingModule({
@@ -38,6 +49,10 @@ describe('WorkerModule', () => {
       .useModule(NoopQueueModule)
       .overrideModule(VideoProcessingModule)
       .useModule(NoopVideoProcessingModule)
+      .overrideModule(ChannelsModule)
+      .useModule(NoopChannelsModule)
+      .overrideModule(UsersModule)
+      .useModule(NoopUsersModule)
       .compile();
 
     expect(module.get(FfmpegService)).toBeDefined();
